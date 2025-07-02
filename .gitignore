@@ -1,0 +1,134 @@
+# WolfMerge .gitignore
+
+# ============================================
+# CRITICAL: Environment Variables & API Keys
+# ============================================
+.env
+.env.local
+.env.production
+.env.staging
+backend/.env
+frontend/.env*
+
+# API Keys and secrets
+config/secrets.json
+secrets/
+api_keys.txt
+
+# ============================================
+# Python Backend
+# ============================================
+# Virtual Environment (be specific to avoid conflicts)
+backend/venv/
+backend/env/
+backend/.venv/
+
+# Python cache
+backend/__pycache__/
+backend/**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Python build artifacts
+backend/build/
+backend/develop-eggs/
+backend/dist/
+backend/downloads/
+backend/eggs/
+backend/.eggs/
+backend/lib/
+backend/lib64/
+backend/parts/
+backend/sdist/
+backend/var/
+backend/wheels/
+backend/share/python-wheels/
+backend/*.egg-info/
+backend/.installed.cfg
+backend/*.egg
+backend/MANIFEST
+
+# Test and coverage
+backend/htmlcov/
+backend/.tox/
+backend/.nox/
+backend/.coverage
+backend/.coverage.*
+backend/.cache
+backend/nosetests.xml
+backend/coverage.xml
+backend/*.cover
+backend/*.py,cover
+backend/.hypothesis/
+backend/.pytest_cache/
+backend/cover/
+
+# ============================================
+# Next.js Frontend
+# ============================================
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/dist/
+frontend/node_modules/
+frontend/.vercel
+
+# Frontend cache and logs
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.eslintcache
+frontend/*.tsbuildinfo
+
+# ============================================
+# Operating System Files
+# ============================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# ============================================
+# IDEs and Editors
+# ============================================
+.vscode/settings.json
+.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*~
+
+# ============================================
+# Logs and Temp Files
+# ============================================
+*.log
+*.backup
+*.bak
+*.tmp
+*.temp
+
+# ============================================
+# Project Specific
+# ============================================
+# Demo and test files that might contain sensitive data
+uploads/
+temp_uploads/
+user_files/

@@ -1,0 +1,21 @@
+Q1 2025 Budget Overview
+
+Department Allocations:
+- Marketing: $20,000
+- Development: $30,000
+- Operations: $15,000
+- Research: $10,000
+- Miscellaneous: $5,000
+
+Total Q1 Budget: $80,000
+
+Notes:
+- Marketing budget reduced from initial $25,000 request
+- Development increased to accommodate new projects
+- Operations includes new software licenses
+- Research budget allocated for market analysis
+
+Important: Current project proposals requesting different amounts need reconciliation with actual budget allocations. Discrepancies noted in Project Alpha proposal ($45k vs $40k available).
+
+Review Date: February 1, 2025
+Approval Status: Pending final department reviews
