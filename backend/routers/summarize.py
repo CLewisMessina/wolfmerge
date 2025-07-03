@@ -6,10 +6,20 @@ import io
 from services.openai_service import OpenAIService
 
 router = APIRouter()
-openai_service = OpenAIService()
+
+# Removed global instantiation - will create service instance in endpoint instead
 
 @router.post("/summarize")
 async def summarize_documents(files: List[UploadFile] = File(...)):
+    # Create service instance here to ensure .env is loaded first
+    try:
+        openai_service = OpenAIService()
+    except ValueError as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"OpenAI service initialization failed: {str(e)}"
+        )
+    
     if len(files) > 3:
         raise HTTPException(
             status_code=400, 
