@@ -1,7 +1,7 @@
 # app/config.py - Day 2 Enhanced
 import os
 from typing import List, Optional
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, Field
 from pydantic import validator
 
 class Settings(BaseSettings):
@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     environment: str = "production"
     
     # Database Configuration (Day 2: EU Cloud)
-    database_url: str
+    database_url: str = Field(..., alias="DATABASE_URL")
     database_url_async: Optional[str] = None
     redis_url: Optional[str] = None
     
