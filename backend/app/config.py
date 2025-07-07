@@ -79,11 +79,7 @@ class Settings(BaseSettings):
 
     @property
     def database_url_async(self) -> str:
-        """Convert database URL to async format when needed"""
-        if self.database_url.startswith("postgresql://") and "asyncpg" not in self.database_url:
-            return self.database_url.replace("postgresql://", "postgresql+asyncpg://")
-        elif self.database_url.startswith("postgres://"):
-            return self.database_url.replace("postgres://", "postgresql+asyncpg://")
+        """Convert database URL to async format when needed - handled in database.py"""
         return self.database_url
     
     @property
