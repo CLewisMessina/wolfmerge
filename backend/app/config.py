@@ -2,6 +2,7 @@
 import os
 from typing import List, Optional
 from pydantic_settings import BaseSettings
+from pydantic import validator
 
 class Settings(BaseSettings):
     # OpenAI Configuration (from Day 1)
@@ -72,6 +73,39 @@ class Settings(BaseSettings):
         "https://app.wolfmerge.com",
         "https://dev-app.wolfmerge.com"
     ]
+    
+    # FIXED: Validator to ensure database URL is properly formatted
+    @validator("database_url")
+    def validate_database_url(cls, v):
+        """Ensure database URL has correct async format"""
+        if not v:
+            raise ValueError("DATABASE_URL is required")
+        
+        # If it's a standard PostgreSQL URL, convert to async format
+        if v.startswith("postgresql://") and not v.startswith("postgresql+asyncpg://"):
+            v = v.replace("postgresql://", "postgresql+asyncpg://")
+        
+        # Validate it's now in the correct format
+        if not v.startswith("postgresql+asyncpg://"):
+            raise ValueError("DATABASE_URL must use postgresql+asyncpg:// for async operations")
+        
+        return v
+    
+    # FIXED: Validator for OpenAI API key
+    @validator("openai_api_key")
+    def validate_openai_key(cls, v):
+        """Ensure OpenAI API key is present"""
+        if not v or v == "your_openai_key":
+            raise ValueError("OPENAI_API_KEY must be set to a valid OpenAI API key")
+        return v
+    
+    # FIXED: Validator for secret key
+    @validator("secret_key")
+    def validate_secret_key(cls, v):
+        """Ensure secret key is secure"""
+        if not v or v == "your_secret_key" or len(v) < 32:
+            raise ValueError("SECRET_KEY must be at least 32 characters long for security")
+        return v
     
     class Config:
         env_file = ".env"

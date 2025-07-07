@@ -8,9 +8,15 @@ from pathlib import Path
 from datetime import datetime, timezone
 import structlog
 
-from docling.document_converter import DocumentConverter
-from docling.datamodel.base_models import InputFormat
-from docling.datamodel.document import Document as DoclingDocument
+try:
+    from docling.document_converter import DocumentConverter
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.document import Document as DoclingDocument
+    DOCLING_AVAILABLE = True
+except ImportError:
+    DOCLING_AVAILABLE = False
+    logger = structlog.get_logger()
+    logger.warning("Docling not available - using fallback text processing")
 
 from app.utils.german_detection import GermanComplianceDetector
 from app.config import settings
@@ -21,14 +27,23 @@ class DoclingProcessor:
     """Enhanced document processing with Docling intelligence for German compliance"""
     
     def __init__(self):
-        self.converter = DocumentConverter()
+        # FIXED: Check if Docling is available before initializing
+        if DOCLING_AVAILABLE:
+            try:
+                self.converter = DocumentConverter()
+            except Exception as e:
+                logger.warning(f"Failed to initialize Docling converter: {e}")
+                self.converter = None
+        else:
+            self.converter = None
+            
         self.detector = GermanComplianceDetector()
         self.supported_formats = {
-            '.pdf': InputFormat.PDF,
-            '.docx': InputFormat.DOCX,
-            '.doc': InputFormat.DOC,
-            '.txt': InputFormat.TEXT,
-            '.md': InputFormat.MARKDOWN
+            '.pdf': 'pdf',
+            '.docx': 'docx',
+            '.doc': 'doc',
+            '.txt': 'text',
+            '.md': 'markdown'
         }
         
     async def process_document(
@@ -51,7 +66,8 @@ class DoclingProcessor:
             filename=filename,
             file_size=len(file_content),
             workspace_id=workspace_id,
-            user_id=user_id
+            user_id=user_id,
+            docling_available=DOCLING_AVAILABLE
         )
         
         # Validate file format
@@ -61,27 +77,42 @@ class DoclingProcessor:
         # Create content hash for deduplication
         content_hash = hashlib.sha256(file_content).hexdigest()
         
+        # FIXED: If Docling is not available or is text/markdown, use fallback immediately
+        if not DOCLING_AVAILABLE or not self.converter or file_extension in ['.txt', '.md']:
+            return await self._process_with_fallback(
+                file_content, filename, content_hash, workspace_id
+            )
+        
         # Create temporary file for Docling processing
-        with tempfile.NamedTemporaryFile(
-            suffix=file_extension,
-            delete=False
-        ) as temp_file:
-            temp_file.write(file_content)
-            temp_path = temp_file.name
+        temp_file = None
+        temp_path = None
         
         try:
+            with tempfile.NamedTemporaryFile(
+                suffix=file_extension,
+                delete=False
+            ) as temp_file:
+                temp_file.write(file_content)
+                temp_path = temp_file.name
+            
             # Convert document with Docling
             docling_result = await self._convert_with_docling(temp_path, filename)
             
-            # Extract document metadata
-            document_metadata = await self._extract_document_metadata(
-                docling_result, filename, content_hash, len(file_content)
-            )
-            
-            # Create intelligent chunks
-            chunks = await self._create_intelligent_chunks(
-                docling_result, filename, workspace_id
-            )
+            if docling_result:
+                # Extract document metadata
+                document_metadata = await self._extract_document_metadata(
+                    docling_result, filename, content_hash, len(file_content)
+                )
+                
+                # Create intelligent chunks
+                chunks = await self._create_intelligent_chunks(
+                    docling_result, filename, workspace_id
+                )
+            else:
+                # Docling failed, use fallback
+                return await self._process_with_fallback(
+                    file_content, filename, content_hash, workspace_id
+                )
             
             processing_time = (datetime.now(timezone.utc) - start_time).total_seconds()
             
@@ -97,26 +128,104 @@ class DoclingProcessor:
             document_metadata.update({
                 'processing_time_seconds': processing_time,
                 'chunk_count': len(chunks),
-                'docling_version': '1.0.0',  # Would get from package
+                'docling_version': '1.0.0' if DOCLING_AVAILABLE else 'fallback',
                 'processed_at': start_time.isoformat()
             })
             
             return chunks, document_metadata
             
+        except Exception as e:
+            logger.error(
+                "Document processing failed, using fallback",
+                filename=filename,
+                error=str(e)
+            )
+            return await self._process_with_fallback(
+                file_content, filename, content_hash, workspace_id
+            )
+            
         finally:
             # Clean up temporary file
-            try:
-                os.unlink(temp_path)
-            except Exception as e:
-                logger.warning("Failed to cleanup temp file", temp_path=temp_path, error=str(e))
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except Exception as e:
+                    logger.warning("Failed to cleanup temp file", temp_path=temp_path, error=str(e))
+    
+    async def _process_with_fallback(
+        self,
+        file_content: bytes,
+        filename: str,
+        content_hash: str,
+        workspace_id: str
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """Process document using fallback text extraction"""
+        
+        logger.info(
+            "Using fallback text processing",
+            filename=filename,
+            reason="Docling unavailable or text format"
+        )
+        
+        # Try to decode content as text
+        try:
+            if isinstance(file_content, bytes):
+                content = file_content.decode('utf-8')
+            else:
+                content = str(file_content)
+        except UnicodeDecodeError:
+            # Try different encodings
+            for encoding in ['utf-8', 'latin-1', 'cp1252']:
+                try:
+                    content = file_content.decode(encoding)
+                    break
+                except:
+                    continue
+            else:
+                # If all fail, use lossy decoding
+                content = file_content.decode('utf-8', errors='replace')
+        
+        # Create metadata
+        metadata = {
+            'filename': filename,
+            'original_filename': filename,
+            'content_hash': content_hash,
+            'file_size': len(file_content),
+            'file_type': Path(filename).suffix.lower().lstrip('.'),
+            'processing_method': 'fallback_text',
+            'docling_success': False
+        }
+        
+        # Detect language and German compliance terms
+        language, confidence = self.detector.detect_language(content, filename)
+        german_terms = self.detector.extract_german_terms(content)
+        gdpr_articles = self.detector.extract_gdpr_articles(content)
+        
+        metadata.update({
+            'language_detected': language,
+            'language_confidence': confidence,
+            'german_content_detected': language == 'de' or bool(german_terms),
+            'german_document_type': self._classify_german_document_type(filename, content, german_terms),
+            'german_terms_count': sum(len(terms) for terms in german_terms.values()),
+            'dsgvo_articles_found': gdpr_articles,
+            'compliance_category': self._classify_compliance_category(content, german_terms)
+        })
+        
+        # Create chunks using fallback method
+        chunks = await self._fallback_text_chunking(content, filename)
+        
+        return chunks, metadata
     
     async def _convert_with_docling(
         self, 
         file_path: str, 
         filename: str
-    ) -> DoclingDocument:
+    ) -> Optional[Any]:
         """Convert document using Docling with error handling"""
         
+        if not self.converter:
+            return None
+            
         try:
             # Run Docling conversion in thread pool to avoid blocking
             loop = asyncio.get_event_loop()
@@ -126,55 +235,20 @@ class DoclingProcessor:
                 file_path
             )
             
-            return docling_result.document
-            
+            # Check if conversion was successful
+            if hasattr(docling_result, 'document'):
+                return docling_result.document
+            else:
+                logger.warning(
+                    "Docling conversion returned unexpected result",
+                    filename=filename,
+                    result_type=type(docling_result)
+                )
+                return None
+                
         except Exception as e:
             logger.error(
                 "Docling conversion failed",
-                filename=filename,
-                error=str(e)
-            )
-            # Create fallback document for text extraction
-            return await self._create_fallback_document(file_path, filename)
-    
-    async def _create_fallback_document(
-        self, 
-        file_path: str, 
-        filename: str
-    ) -> Optional[DoclingDocument]:
-        """Create fallback document structure when Docling fails"""
-        
-        try:
-            # For text files, read directly
-            if filename.lower().endswith(('.txt', '.md')):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                
-                # Create minimal document structure
-                class FallbackDocument:
-                    def __init__(self, content):
-                        self.content = content
-                        self.body = FallbackBody(content)
-                    
-                    def export_to_markdown(self):
-                        return self.content
-                
-                class FallbackBody:
-                    def __init__(self, content):
-                        self.elements = [FallbackElement(content)]
-                
-                class FallbackElement:
-                    def __init__(self, content):
-                        self.text = content
-                        self.page = 1
-                
-                return FallbackDocument(content)
-            
-            return None
-            
-        except Exception as e:
-            logger.error(
-                "Fallback document creation failed",
                 filename=filename,
                 error=str(e)
             )
@@ -182,7 +256,7 @@ class DoclingProcessor:
     
     async def _extract_document_metadata(
         self,
-        docling_result: DoclingDocument,
+        docling_result: Any,
         filename: str,
         content_hash: str,
         file_size: int
@@ -197,12 +271,8 @@ class DoclingProcessor:
             'file_size': file_size,
             'file_type': Path(filename).suffix.lower().lstrip('.'),
             'processing_method': 'docling',
-            'docling_success': docling_result is not None
+            'docling_success': True
         }
-        
-        if docling_result is None:
-            metadata['processing_method'] = 'fallback'
-            return metadata
         
         try:
             # Extract content for language detection
@@ -225,18 +295,9 @@ class DoclingProcessor:
             docling_metadata = {
                 'page_count': getattr(docling_result, 'page_count', 1),
                 'has_tables': self._detect_tables(docling_result),
-                'has_images': self._detect_images(docling_result),
+                'has_images': False,  # Disabled for now
                 'document_structure': self._analyze_document_structure(docling_result)
             }
-            
-            # Add extracted title and author if available
-            if hasattr(docling_result, 'metadata'):
-                doc_meta = docling_result.metadata
-                docling_metadata.update({
-                    'title': getattr(doc_meta, 'title', ''),
-                    'author': getattr(doc_meta, 'author', ''),
-                    'creation_date': getattr(doc_meta, 'creation_date', None)
-                })
             
             metadata.update({
                 'language_detected': language,
@@ -261,16 +322,13 @@ class DoclingProcessor:
     
     async def _create_intelligent_chunks(
         self,
-        docling_result: DoclingDocument,
+        docling_result: Any,
         filename: str,
         workspace_id: str
     ) -> List[Dict[str, Any]]:
         """Create semantically meaningful chunks from Docling output"""
         
         chunks = []
-        
-        if docling_result is None:
-            return chunks
         
         try:
             # Get document structure from Docling
@@ -280,7 +338,10 @@ class DoclingProcessor:
                 )
             else:
                 # Fallback to text-based chunking
-                content = docling_result.export_to_markdown() if hasattr(docling_result, 'export_to_markdown') else str(docling_result)
+                if hasattr(docling_result, 'export_to_markdown'):
+                    content = docling_result.export_to_markdown()
+                else:
+                    content = str(docling_result)
                 chunks = await self._fallback_text_chunking(content, filename)
                 
         except Exception as e:
@@ -299,7 +360,14 @@ class DoclingProcessor:
                     filename=filename,
                     error=str(fallback_error)
                 )
-                chunks = []
+                # Return at least one chunk with the content we have
+                chunks = [{
+                    'chunk_index': 0,
+                    'content': str(docling_result)[:1000],  # First 1000 chars
+                    'chunk_type': 'error_fallback',
+                    'page_number': 1,
+                    'error': True
+                }]
         
         # Limit chunks for Day 2 performance
         if len(chunks) > settings.max_chunks_per_document:
@@ -378,13 +446,17 @@ class DoclingProcessor:
     def _extract_element_text(self, element) -> str:
         """Extract text content from Docling element"""
         try:
+            # Try various attributes that might contain text
             if hasattr(element, 'text'):
-                return element.text
+                return str(element.text)
             elif hasattr(element, 'content'):
                 return str(element.content)
             elif hasattr(element, 'value'):
                 return str(element.value)
+            elif hasattr(element, 'get_text'):
+                return element.get_text()
             else:
+                # Last resort - convert to string
                 return str(element)
         except Exception:
             return ""
@@ -579,6 +651,12 @@ class DoclingProcessor:
             )
             chunks.append(chunk)
         
+        # If no chunks were created, create at least one
+        if not chunks and content.strip():
+            chunks.append(await self._create_fallback_chunk(
+                content[:chunk_size], 0, filename
+            ))
+        
         return chunks
     
     async def _create_fallback_chunk(
@@ -727,17 +805,6 @@ class DoclingProcessor:
             pass
         return False
     
-    def _detect_images(self, docling_result) -> bool:
-        """Detect if document contains images"""
-        try:
-            if hasattr(docling_result, 'body') and hasattr(docling_result.body, 'elements'):
-                return any(elem_type in str(type(element).__name__).lower() 
-                         for element in docling_result.body.elements
-                         for elem_type in ['figure', 'image', 'picture'])
-        except Exception:
-            pass
-        return False
-    
     def _analyze_document_structure(self, docling_result) -> Dict[str, int]:
         """Analyze document structure for metadata"""
         structure = {
@@ -767,4 +834,3 @@ class DoclingProcessor:
             pass
         
         return structure
-                

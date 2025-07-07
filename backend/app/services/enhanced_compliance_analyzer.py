@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timezone, timedelta
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
-import openAI
+from openai import OpenAI  # FIXED: correct import
 
 from app.config import settings
 from app.models.database import Workspace, User, Document, DocumentChunk, ComplianceAnalysis
@@ -21,8 +21,7 @@ class EnhancedComplianceAnalyzer:
     
     def __init__(self, db_session: AsyncSession):
         self.db = db_session
-        openai.api_key = settings.openai_api_key
-        self.client = openai
+        self.client = OpenAI(api_key=settings.openai_api_key)  # FIXED: proper client initialization
         self.docling_processor = DoclingProcessor()
         self.audit_service = AuditService(db_session)
         self.detector = GermanComplianceDetector()
@@ -77,7 +76,7 @@ class EnhancedComplianceAnalyzer:
                     content, filename, workspace_id, user_id
                 )
                 
-                # Store document and chunks in database
+                # Store document and chunks in database with proper transaction handling
                 document = await self._store_document_with_chunks(
                     workspace_id, user_id, filename, size, metadata, chunks
                 )
@@ -164,13 +163,13 @@ class EnhancedComplianceAnalyzer:
             
         except Exception as e:
             # Log error for audit trail
-            await self.audit_service.log_action(
+            await self.audit_service.log_error(
                 workspace_id=workspace_id,
                 user_id=user_id,
                 action="document_analysis_failed",
+                error_message=str(e),
                 resource_type="analysis",
                 details={
-                    "error": str(e),
                     "framework": framework.value,
                     "processing_time": time.time() - start_time
                 }
@@ -194,72 +193,86 @@ class EnhancedComplianceAnalyzer:
         metadata: Dict[str, Any],
         chunks: List[Dict[str, Any]]
     ) -> Document:
-        """Store document and its chunks in database with GDPR compliance"""
+        """Store document and its chunks in database with GDPR compliance and proper transaction handling"""
         
         # Calculate retention date
         retention_date = datetime.now(timezone.utc) + timedelta(hours=settings.data_retention_hours)
         
-        # Create document record
-        document = Document(
-            workspace_id=workspace_id,
-            filename=filename,
-            original_filename=metadata.get('original_filename', filename),
-            file_size=size,
-            file_type=metadata.get('file_type', 'unknown'),
-            mime_type=metadata.get('mime_type', 'application/octet-stream'),
-            content_hash=metadata.get('content_hash', ''),
-            language_detected=metadata.get('language_detected', 'unknown'),
-            processing_status='completed',
-            docling_metadata=metadata.get('docling_metadata', {}),
-            german_document_type=metadata.get('german_document_type'),
-            compliance_category=metadata.get('compliance_category', 'general'),
-            dsgvo_relevance_score=metadata.get('dsgvo_relevance_score', 0.0),
-            uploaded_by=user_id,
-            retention_until=retention_date
-        )
-        
-        self.db.add(document)
-        await self.db.flush()  # Get document ID
-        
-        # Store chunks with GDPR-compliant retention
-        for chunk_data in chunks:
-            chunk = DocumentChunk(
-                document_id=document.id,
-                chunk_index=chunk_data["chunk_index"],
-                content=chunk_data["content"],  # Will be auto-deleted per retention policy
-                content_hash=chunk_data.get("content_hash", ""),
-                chunk_type=chunk_data["chunk_type"],
-                page_number=chunk_data.get("page_number", 1),
-                position_in_page=chunk_data.get("position_in_page", 0),
-                char_count=chunk_data.get("char_count", 0),
-                confidence_score=chunk_data.get("confidence_score", 0.0),
-                structural_importance=chunk_data.get("structural_importance", 0.5),
-                language_detected=chunk_data.get("language_detected", "unknown"),
-                german_terms=chunk_data.get("german_terms", {}),
-                dsgvo_articles=chunk_data.get("dsgvo_articles", []),
-                compliance_tags=chunk_data.get("compliance_tags", [])
+        try:
+            # Use transaction context for automatic rollback on error
+            async with self.db.begin_nested():  # Creates a savepoint
+                # Create document record
+                document = Document(
+                    workspace_id=workspace_id,
+                    filename=filename,
+                    original_filename=metadata.get('original_filename', filename),
+                    file_size=size,
+                    file_type=metadata.get('file_type', 'unknown'),
+                    mime_type=metadata.get('mime_type', 'application/octet-stream'),
+                    content_hash=metadata.get('content_hash', ''),
+                    language_detected=metadata.get('language_detected', 'unknown'),
+                    processing_status='completed',
+                    docling_metadata=metadata.get('docling_metadata', {}),
+                    german_document_type=metadata.get('german_document_type'),
+                    compliance_category=metadata.get('compliance_category', 'general'),
+                    dsgvo_relevance_score=metadata.get('dsgvo_relevance_score', 0.0),
+                    uploaded_by=user_id,
+                    retention_until=retention_date
+                )
+                
+                self.db.add(document)
+                await self.db.flush()  # Get document ID
+                
+                # Store chunks with GDPR-compliant retention
+                for chunk_data in chunks:
+                    chunk = DocumentChunk(
+                        document_id=document.id,
+                        chunk_index=chunk_data["chunk_index"],
+                        content=chunk_data["content"],  # Will be auto-deleted per retention policy
+                        content_hash=chunk_data.get("content_hash", ""),
+                        chunk_type=chunk_data["chunk_type"],
+                        page_number=chunk_data.get("page_number", 1),
+                        position_in_page=chunk_data.get("position_in_page", 0),
+                        char_count=chunk_data.get("char_count", 0),
+                        confidence_score=chunk_data.get("confidence_score", 0.0),
+                        structural_importance=chunk_data.get("structural_importance", 0.5),
+                        language_detected=chunk_data.get("language_detected", "unknown"),
+                        german_terms=chunk_data.get("german_terms", {}),
+                        dsgvo_articles=chunk_data.get("dsgvo_articles", []),
+                        compliance_tags=chunk_data.get("compliance_tags", [])
+                    )
+                    
+                    self.db.add(chunk)
+            
+            # Commit the transaction
+            await self.db.commit()
+            
+            # Log document storage
+            await self.audit_service.log_action(
+                workspace_id=workspace_id,
+                user_id=user_id,
+                action="document_stored",
+                resource_type="document",
+                resource_id=str(document.id),
+                details={
+                    "filename": filename,
+                    "chunk_count": len(chunks),
+                    "german_content": metadata.get('german_content_detected', False),
+                    "retention_until": retention_date.isoformat()
+                }
             )
             
-            self.db.add(chunk)
-        
-        await self.db.commit()
-        
-        # Log document storage
-        await self.audit_service.log_action(
-            workspace_id=workspace_id,
-            user_id=user_id,
-            action="document_stored",
-            resource_type="document",
-            resource_id=str(document.id),
-            details={
-                "filename": filename,
-                "chunk_count": len(chunks),
-                "german_content": metadata.get('german_content_detected', False),
-                "retention_until": retention_date.isoformat()
-            }
-        )
-        
-        return document
+            return document
+            
+        except Exception as e:
+            # Transaction will automatically rollback
+            logger.error(
+                "Failed to store document with chunks",
+                filename=filename,
+                workspace_id=workspace_id,
+                error=str(e)
+            )
+            raise
     
     async def _analyze_document_chunks(
         self,
@@ -292,8 +305,16 @@ class EnhancedComplianceAnalyzer:
                         filename=filename,
                         error=str(result)
                     )
-                    continue
-                chunk_analyses.append(result)
+                    # Add fallback analysis for failed chunk
+                    chunk_analyses.append({
+                        "chunk_index": -1,
+                        "chunk_type": "error",
+                        "compliance_summary": f"Analysis failed: {str(result)}",
+                        "compliance_score": 0.0,
+                        "error": True
+                    })
+                else:
+                    chunk_analyses.append(result)
         
         return chunk_analyses
     
@@ -362,14 +383,6 @@ class EnhancedComplianceAnalyzer:
                 "compliance_tags": chunk.get("compliance_tags", [])
             }
     
-    def _create_chunk_analysis_prompt(
-        self,
-        chunk: Dict[str, Any],
-        framework: ComplianceFramework,
-        filename: str
-    ) -> str:
-        """Create German-aware compliance analysis prompt for individual chunk"""
-        
     def _create_chunk_analysis_prompt(
         self,
         chunk: Dict[str, Any],
@@ -733,7 +746,7 @@ Map content to specific ISO 27001 controls and implementation requirements.
                 f"German DSGVO content detected in {german_chunks} chunks with specialized compliance analysis."
             )
         
-        if metadata.get('docling_metadata', {}).get('tables_detected'):
+        if metadata.get('docling_metadata', {}).get('has_tables'):
             summary_parts.append("Document contains structured tables analyzed for compliance requirements.")
         
         summary_parts.append(f"Overall document compliance score: {avg_compliance:.2f}/1.0")
@@ -861,7 +874,8 @@ Map content to specific ISO 27001 controls and implementation requirements.
         # Calculate overall compliance score
         compliance_scores = [
             score for analysis in analyses 
-            for score in [getattr(analysis, 'compliance_score', None)]
+            for mapping in analysis.control_mappings
+            for score in [mapping.confidence]
             if score is not None
         ]
         
@@ -927,45 +941,55 @@ Overall workspace compliance score: {overall_compliance_score:.2f}/1.0
         report: ComplianceReport,
         framework: ComplianceFramework
     ) -> ComplianceAnalysis:
-        """Store comprehensive analysis results in database"""
+        """Store comprehensive analysis results in database with transaction handling"""
         
-        analysis_record = ComplianceAnalysis(
-            workspace_id=workspace_id,
-            user_id=user_id,
-            framework=framework.value,
-            analysis_type="workspace_batch",
-            analysis_results={
-                "individual_analyses": [analysis.dict() for analysis in analyses],
-                "compliance_report": report.dict(),
-                "analysis_metadata": {
-                    "docling_enabled": True,
-                    "chunk_level_analysis": True,
-                    "german_dsgvo_analysis": True,
-                    "eu_cloud_processing": True
-                }
-            },
-            compliance_score=report.compliance_score,
-            confidence_level=0.85,  # High confidence with Docling + chunk analysis
-            german_language_detected=report.german_documents_detected,
-            dsgvo_compliance_score=report.compliance_score if report.german_documents_detected else None,
-            german_authority_compliance={
-                "analysis_completed": True,
-                "dsgvo_articles_mapped": True,
-                "audit_trail_available": True
-            } if report.german_documents_detected else None,
-            chunk_count=sum(1 for analysis in analyses),  # Approximate chunk count
-            processing_time_seconds=sum(
-                getattr(analysis, 'processing_time', 0.0) for analysis in analyses
-            ),
-            ai_model_used=settings.openai_model,
-            docling_version="1.0.0",
-            completed_at=datetime.now(timezone.utc)
-        )
-        
-        self.db.add(analysis_record)
-        await self.db.commit()
-        
-        return analysis_record
+        try:
+            async with self.db.begin_nested():
+                analysis_record = ComplianceAnalysis(
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    framework=framework.value,
+                    analysis_type="workspace_batch",
+                    analysis_results={
+                        "individual_analyses": [analysis.dict() for analysis in analyses],
+                        "compliance_report": report.dict(),
+                        "analysis_metadata": {
+                            "docling_enabled": True,
+                            "chunk_level_analysis": True,
+                            "german_dsgvo_analysis": True,
+                            "eu_cloud_processing": True
+                        }
+                    },
+                    compliance_score=report.compliance_score,
+                    confidence_level=0.85,  # High confidence with Docling + chunk analysis
+                    german_language_detected=report.german_documents_detected,
+                    dsgvo_compliance_score=report.compliance_score if report.german_documents_detected else None,
+                    german_authority_compliance={
+                        "analysis_completed": True,
+                        "dsgvo_articles_mapped": True,
+                        "audit_trail_available": True
+                    } if report.german_documents_detected else None,
+                    chunk_count=sum(1 for analysis in analyses),  # Approximate chunk count
+                    processing_time_seconds=sum(
+                        getattr(analysis, 'processing_time', 0.0) for analysis in analyses
+                    ),
+                    ai_model_used=settings.openai_model,
+                    docling_version="1.0.0",
+                    completed_at=datetime.now(timezone.utc)
+                )
+                
+                self.db.add(analysis_record)
+            
+            await self.db.commit()
+            return analysis_record
+            
+        except Exception as e:
+            logger.error(
+                "Failed to store analysis results",
+                workspace_id=workspace_id,
+                error=str(e)
+            )
+            raise
     
     async def _secure_delete_content(self, content: bytes) -> None:
         """Secure deletion for GDPR compliance"""
