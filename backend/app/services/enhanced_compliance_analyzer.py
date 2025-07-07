@@ -2,7 +2,7 @@
 import time
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 import openAI
