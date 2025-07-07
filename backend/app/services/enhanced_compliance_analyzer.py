@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
-from openai import OpenAI
+import OpenAI
 
 from app.config import settings
 from app.models.database import Workspace, User, Document, DocumentChunk, ComplianceAnalysis
@@ -21,7 +21,8 @@ class EnhancedComplianceAnalyzer:
     
     def __init__(self, db_session: AsyncSession):
         self.db = db_session
-        self.client = OpenAI(api_key=settings.openai_api_key)
+        openai.api_key = settings.openai_api_key
+        self.client = openai
         self.docling_processor = DoclingProcessor()
         self.audit_service = AuditService(db_session)
         self.detector = GermanComplianceDetector()
