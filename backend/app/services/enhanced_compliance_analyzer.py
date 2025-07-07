@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
-import OpenAI
+import openAI
 
 from app.config import settings
 from app.models.database import Workspace, User, Document, DocumentChunk, ComplianceAnalysis
