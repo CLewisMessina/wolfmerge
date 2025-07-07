@@ -1,4 +1,4 @@
-# app/main.py - Day 2 Enhanced Enterprise Application
+# app/main.py - Day 2 Enhanced Enterprise Application (Railway Fixed)
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -65,30 +65,20 @@ async def lifespan(app: FastAPI):
                 eu_region=db_health.get("eu_region")
             )
         else:
-            logger.error("Database health check failed", db_health=db_health)
+            logger.error("Database health check failed")
         
-        # FIXED: Test OpenAI connectivity on startup
+        # Test OpenAI connectivity on startup
         try:
             client = OpenAI(api_key=settings.openai_api_key)
             logger.info("OpenAI client initialized successfully")
         except Exception as e:
-            logger.error(f"OpenAI initialization failed: {e}")
+            logger.error("OpenAI initialization failed", error=str(e))
         
-        # Log startup completion
-        logger.info(
-            "WolfMerge Enterprise Platform started successfully",
-            version="2.0.0",
-            features={
-                "docling_enabled": settings.docling_enabled,
-                "workspaces_enabled": settings.enable_workspaces,
-                "audit_logging": settings.audit_logging,
-                "eu_cloud": settings.eu_region,
-                "gdpr_compliant": settings.gdpr_compliance
-            }
-        )
+        # Log startup completion - FIXED: Remove problematic kwargs
+        logger.info("WolfMerge Enterprise Platform started successfully")
         
     except Exception as e:
-        logger.error("Startup failed", error=str(e), traceback=traceback.format_exc())
+        logger.error("Startup failed", error=str(e))
         raise
     
     yield
@@ -97,10 +87,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down WolfMerge Enterprise Platform")
     
     try:
-        # Cleanup tasks would go here (e.g., close connections, cleanup temp files)
-        # For Day 2, we'll add basic cleanup logging
         logger.info("Cleanup completed successfully")
-        
     except Exception as e:
         logger.error("Shutdown cleanup failed", error=str(e))
 
@@ -209,8 +196,7 @@ async def log_requests(request: Request, call_next):
             method=request.method,
             url=str(request.url),
             error=str(e),
-            processing_time=processing_time,
-            traceback=traceback.format_exc()
+            processing_time=processing_time
         )
         
         # Return structured error response
@@ -240,7 +226,7 @@ app.include_router(
     tags=["Day 2 - Enterprise Features with Docling Intelligence"]
 )
 
-# FIXED: Add comprehensive exception handler
+# Comprehensive exception handler
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     """Handle all unhandled exceptions"""
@@ -251,8 +237,7 @@ async def general_exception_handler(request: Request, exc: Exception):
         request_id=request_id,
         path=request.url.path,
         error=str(exc),
-        error_type=type(exc).__name__,
-        traceback=traceback.format_exc()
+        error_type=type(exc).__name__
     )
     
     return JSONResponse(
@@ -351,7 +336,7 @@ async def health_check_endpoint():
         # Get database health
         db_health = await health_check()
         
-        # FIXED: Enhanced health checks for all services
+        # Enhanced health checks for all services
         service_checks = {
             "api_server": True,  # Always true if we get here
             "database": False,
@@ -368,7 +353,7 @@ async def health_check_endpoint():
             # Simple check - just see if client initializes
             service_checks["openai"] = True
         except Exception as e:
-            logger.warning(f"OpenAI health check failed: {e}")
+            logger.warning("OpenAI health check failed", error=str(e))
         
         # Check Docling (simple check - see if it's enabled)
         service_checks["docling"] = settings.docling_enabled
@@ -415,16 +400,12 @@ async def health_check_endpoint():
             }
         }
         
-        logger.info(
-            "Health check completed",
-            status=health_status["status"],
-            services=service_checks
-        )
+        logger.info("Health check completed", status=health_status["status"])
         
         return health_status
         
     except Exception as e:
-        logger.error("Health check failed", error=str(e), traceback=traceback.format_exc())
+        logger.error("Health check failed", error=str(e))
         
         return {
             "status": "unhealthy",
@@ -521,8 +502,7 @@ async def internal_error_handler(request: Request, exc):
         path=request.url.path,
         method=request.method,
         error=str(exc),
-        client_ip=request.client.host if request.client else None,
-        traceback=traceback.format_exc()
+        client_ip=request.client.host if request.client else None
     )
     
     return JSONResponse(
@@ -542,25 +522,13 @@ async def internal_error_handler(request: Request, exc):
         }
     )
 
+# OPTIONAL: Local development runner (Railway doesn't need this)
 if __name__ == "__main__":
     import uvicorn
-    
-    # Configure for enterprise deployment
-    uvicorn_config = {
-        "app": "app.main:app",
-        "host": "0.0.0.0",
-        "port": 8000,
-        "reload": settings.debug,
-        "access_log": True,
-        "log_level": "info" if not settings.debug else "debug",
-        "workers": 1 if settings.debug else 4  # Single worker for debug, multiple for production
-    }
-    
-    logger.info(
-        "Starting WolfMerge Enterprise Platform",
-        config=uvicorn_config,
-        version="2.0.0",
-        day="Day 2 - Enterprise Cloud Platform"
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        log_level="debug"
     )
-    
-    uvicorn.run(**uvicorn_config)
