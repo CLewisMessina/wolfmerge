@@ -1,8 +1,8 @@
-# app/config.py - Day 2 Enhanced
+# app/config.py - Day 2 Enhanced (Railway Deploy Fixed)
 import os
 from typing import List, Optional
-from pydantic_settings import BaseSettings, Field
-from pydantic import validator
+from pydantic_settings import BaseSettings
+from pydantic import Field, validator
 
 class Settings(BaseSettings):
     # OpenAI Configuration (from Day 1)
