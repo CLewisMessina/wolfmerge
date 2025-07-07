@@ -1,9 +1,39 @@
+# requirements.txt - Day 2 Enhanced
+# Core FastAPI (from Day 1)
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
 python-dotenv==1.0.0
+aiofiles>=23.0.0
+python-magic>=0.4.27
+
+# AI & Analysis (enhanced from Day 1)
 openai>=1.0.0
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
-python-magic>=0.4.27
-aiofiles>=23.0.0
+
+# Day 2 Additions: Database & EU Cloud
+sqlalchemy[asyncio]>=2.0.0
+asyncpg>=0.29.0
+alembic>=1.13.0
+psycopg2-binary>=2.9.0
+
+# Day 2 Additions: Document Intelligence
+docling>=1.0.0
+docling-core>=1.0.0
+pymupdf>=1.23.0  # PDF processing support
+python-docx>=0.8.11  # DOCX processing support
+
+# Day 2 Additions: Authentication & Security
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+python-multipart>=0.0.6
+
+# Day 2 Additions: Caching & Performance
+redis>=5.0.0
+celery>=5.3.0
+
+# Day 2 Additions: Enterprise Features
+structlog>=23.0.0  # Structured logging for audit trails
+tenacity>=8.2.0    # Retry logic for reliability
+httpx>=0.25.0      # Async HTTP client
