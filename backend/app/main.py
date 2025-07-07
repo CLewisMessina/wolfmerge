@@ -1,4 +1,4 @@
-# app/main.py - Day 2 Enhanced Enterprise Application
+# app/main.py - Debug Version to Isolate Import Issue
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -9,9 +9,13 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.routers import compliance  # Day 1 router (backward compatibility)
-from app.routers import enhanced_compliance  # Day 2 enterprise router
-from app.database import create_tables, init_demo_data, health_check
+from app.routers import compliance  # Day 1 router (working)
+
+# TEMPORARILY COMMENT OUT Day 2 router to isolate import issue
+# from app.routers import enhanced_compliance  # Day 2 enterprise router
+
+# TEMPORARILY COMMENT OUT database imports to isolate issue
+# from app.database import create_tables, init_demo_data, health_check
 
 # Configure structured logging
 structlog.configure(
@@ -36,46 +40,17 @@ logger = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan management for Day 2 enterprise features"""
+    """Simplified lifespan for debugging"""
     
     # Startup
-    logger.info("Starting WolfMerge Enterprise Compliance Platform v2.0")
+    logger.info("Starting WolfMerge Platform - Debug Mode")
     
     try:
-        # Initialize database tables
-        logger.info("Creating database tables...")
-        await create_tables()
-        logger.info("Database tables created successfully")
+        # TEMPORARILY SKIP database initialization to isolate import issue
+        # await create_tables()
+        # await init_demo_data()
         
-        # Initialize demo data for Day 2 testing
-        logger.info("Initializing demo data...")
-        await init_demo_data()
-        logger.info("Demo data initialized successfully")
-        
-        # Verify database health
-        db_health = await health_check()
-        if db_health.get("database_connected"):
-            logger.info(
-                "Database health check passed",
-                tables_created=db_health.get("tables_created"),
-                demo_data_loaded=db_health.get("demo_data_loaded"),
-                eu_region=db_health.get("eu_region")
-            )
-        else:
-            logger.error("Database health check failed", db_health=db_health)
-        
-        # Log startup completion
-        logger.info(
-            "WolfMerge Enterprise Platform started successfully",
-            version="2.0.0",
-            features={
-                "docling_enabled": settings.docling_enabled,
-                "workspaces_enabled": settings.enable_workspaces,
-                "audit_logging": settings.audit_logging,
-                "eu_cloud": settings.eu_region,
-                "gdpr_compliant": settings.gdpr_compliance
-            }
-        )
+        logger.info("WolfMerge Platform started successfully - Debug Mode")
         
     except Exception as e:
         logger.error("Startup failed", error=str(e))
@@ -84,402 +59,124 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown
-    logger.info("Shutting down WolfMerge Enterprise Platform")
-    
-    try:
-        # Cleanup tasks would go here (e.g., close connections, cleanup temp files)
-        # For Day 2, we'll add basic cleanup logging
-        logger.info("Cleanup completed successfully")
-        
-    except Exception as e:
-        logger.error("Shutdown cleanup failed", error=str(e))
+    logger.info("Shutting down WolfMerge Platform")
 
-# Create FastAPI app with enhanced enterprise features
+# Create simplified FastAPI app for debugging
 app = FastAPI(
-    title="WolfMerge Enterprise Compliance Platform",
-    version="2.0.0",
-    description="""
-    AI-powered compliance analysis platform for German enterprises.
-    
-    **Day 2 Enterprise Features:**
-    - Docling intelligent document processing with semantic chunking
-    - Team workspace collaboration with PostgreSQL backend
-    - Advanced German DSGVO compliance analysis
-    - EU cloud deployment with GDPR-compliant audit trails
-    - Chunk-level compliance insights for detailed audit preparation
-    
-    **German Market Focus:**
-    - Native DSGVO terminology recognition and article mapping
-    - German supervisory authority compliance verification  
-    - Industry-specific templates for automotive, healthcare, manufacturing
-    - SME-focused workflows at enterprise-grade quality
-    
-    **API Versions:**
-    - `/api/compliance` - Day 1 basic analysis (backward compatible)
-    - `/api/v2/compliance` - Day 2 enterprise features with Docling intelligence
-    """,
+    title="WolfMerge Compliance Platform - Debug",
+    version="2.0.0-debug",
+    description="Debug version to isolate import issues",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc"
 )
 
-# Security middleware for enterprise deployment
-app.add_middleware(
-    TrustedHostMiddleware, 
-    allowed_hosts=[
-        "localhost",
-        "127.0.0.1", 
-        "api.wolfmerge.com",
-        "dev-api.wolfmerge.com",
-        "*.railway.app"
-    ]
-)
-
-# Enhanced CORS middleware for enterprise deployment
+# Basic middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins + [
-        "https://app.wolfmerge.com",
-        "https://dev-app.wolfmerge.com",
-        "https://*.wolfmerge.com"
-    ],
+    allow_origins=["*"],  # Simplified for debugging
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
-    expose_headers=["X-Analysis-ID", "X-Workspace-ID", "X-Processing-Time"]
 )
 
-# Request logging middleware for audit trails
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    """Log all requests for audit trails and monitoring"""
-    
-    start_time = datetime.now(timezone.utc)
-    
-    # Log request start
-    logger.info(
-        "Request started",
-        method=request.method,
-        url=str(request.url),
-        client_ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        content_length=request.headers.get("content-length")
-    )
-    
-    try:
-        response = await call_next(request)
-        
-        processing_time = (datetime.now(timezone.utc) - start_time).total_seconds()
-        
-        # Add processing time header
-        response.headers["X-Processing-Time"] = str(processing_time)
-        
-        # Log successful request
-        logger.info(
-            "Request completed",
-            method=request.method,
-            url=str(request.url),
-            status_code=response.status_code,
-            processing_time=processing_time
-        )
-        
-        return response
-        
-    except Exception as e:
-        processing_time = (datetime.now(timezone.utc) - start_time).total_seconds()
-        
-        # Log failed request
-        logger.error(
-            "Request failed",
-            method=request.method,
-            url=str(request.url),
-            error=str(e),
-            processing_time=processing_time
-        )
-        
-        # Return structured error response
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "Internal server error",
-                "message": "Request processing failed",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "processing_time": processing_time
-            }
-        )
-
-# Include API routers with backward compatibility
+# Include only Day 1 router (working)
 app.include_router(
     compliance.router, 
-    tags=["Day 1 - Basic Compliance (Backward Compatible)"]
+    tags=["Day 1 - Basic Compliance (Working)"]
 )
 
-app.include_router(
-    enhanced_compliance.router, 
-    tags=["Day 2 - Enterprise Features with Docling Intelligence"]
-)
+# TEMPORARILY COMMENT OUT Day 2 router
+# app.include_router(
+#     enhanced_compliance.router, 
+#     tags=["Day 2 - Enterprise Features"]
+# )
 
 @app.get("/")
 async def root():
-    """Root endpoint with comprehensive platform information"""
+    """Simplified root endpoint for debugging"""
     
     return {
-        "message": "WolfMerge Enterprise Compliance Platform",
-        "version": "2.0.0",
-        "day": "Day 2 - Enterprise Cloud Platform with Docling Intelligence",
+        "message": "WolfMerge Compliance Platform - Debug Mode",
+        "version": "2.0.0-debug",
+        "status": "Day 1 working, Day 2 temporarily disabled for debugging",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "description": "AI-powered German DSGVO compliance analysis for SME and enterprise teams",
         
-        "features": {
-            "day_1_features": [
-                "German DSGVO compliance analysis",
-                "Multi-framework support (GDPR/SOC2/HIPAA/ISO27001)",
-                "Professional API with OpenAPI documentation",
-                "EU cloud deployment"
-            ],
-            "day_2_enhancements": [
-                "Docling intelligent document processing",
-                "Team workspace collaboration",
-                "Chunk-level compliance analysis",
-                "GDPR-compliant audit trails",
-                "German industry-specific templates",
-                "Enterprise-grade security and monitoring"
-            ]
-        },
-        
-        "api_endpoints": {
+        "working_endpoints": {
             "day_1_basic": {
                 "analyze": "/api/compliance/analyze",
                 "frameworks": "/api/compliance/frameworks",
                 "health": "/health"
-            },
-            "day_2_enterprise": {
-                "analyze": "/api/v2/compliance/analyze",
-                "history": "/api/v2/compliance/workspace/{workspace_id}/history",
-                "audit_trail": "/api/v2/compliance/workspace/{workspace_id}/audit-trail",
-                "compliance_report": "/api/v2/compliance/workspace/{workspace_id}/compliance-report",
-                "german_templates": "/api/v2/compliance/templates/german-industry",
-                "health": "/api/v2/compliance/health"
             }
         },
         
-        "german_compliance": {
-            "dsgvo_articles_supported": ["Art. 5", "Art. 6", "Art. 7", "Art. 13-18", "Art. 20", "Art. 25", "Art. 30", "Art. 32", "Art. 35"],
-            "german_authorities": ["BfDI", "BayLDA", "LfDI"],
-            "industry_templates": ["automotive", "healthcare", "manufacturing"],
-            "language_support": ["German (de)", "English (en)"],
-            "legal_framework_coverage": ["DSGVO", "BDSG", "GDPR"]
-        },
-        
-        "enterprise_ready": {
-            "eu_cloud_deployment": settings.eu_region,
-            "gdpr_compliance": settings.gdpr_compliance,
-            "audit_trails": settings.audit_logging,
-            "team_workspaces": settings.enable_workspaces,
-            "document_intelligence": settings.docling_enabled,
-            "data_residency": settings.data_residency
-        },
-        
-        "target_market": {
-            "primary": "German SMEs (10-500 employees)",
-            "secondary": "German compliance consultants", 
-            "pricing_model": "€200/month SME tier vs €2000+/month enterprise alternatives",
-            "value_proposition": "Enterprise-grade German DSGVO compliance at SME-friendly pricing"
-        },
-        
-        "documentation": {
-            "interactive_docs": "/docs",
-            "redoc": "/redoc",
-            "openapi_spec": "/openapi.json"
+        "debug_info": {
+            "day_2_router": "temporarily disabled",
+            "database_init": "temporarily disabled",
+            "purpose": "isolate import issues"
         }
     }
 
 @app.get("/health")
-async def health_check_endpoint():
-    """Comprehensive health check for Day 2 enterprise platform"""
-    
-    try:
-        # Get database health
-        db_health = await health_check()
-        
-        # Overall system health
-        system_healthy = (
-            db_health.get("database_connected", False) and
-            db_health.get("tables_created", False)
-        )
-        
-        health_status = {
-            "status": "healthy" if system_healthy else "degraded",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "version": "2.0.0",
-            "environment": settings.environment,
-            
-            "core_services": {
-                "api_server": "healthy",
-                "database": "healthy" if db_health.get("database_connected") else "unhealthy",
-                "docling_processor": "healthy" if settings.docling_enabled else "disabled",
-                "audit_service": "healthy" if settings.audit_logging else "disabled"
-            },
-            
-            "database_details": db_health,
-            
-            "compliance_features": {
-                "german_dsgvo_analysis": "active",
-                "multi_framework_support": "active", 
-                "audit_trails": "active" if settings.audit_logging else "inactive",
-                "eu_data_residency": "compliant" if settings.eu_region else "non_compliant",
-                "gdpr_compliance": "enforced" if settings.gdpr_compliance else "disabled"
-            },
-            
-            "performance_metrics": {
-                "max_file_size_mb": settings.max_file_size_mb,
-                "max_files_per_batch": settings.max_files_per_batch,
-                "max_chunks_per_document": settings.max_chunks_per_document,
-                "data_retention_hours": settings.data_retention_hours,
-                "audit_retention_days": settings.audit_retention_days
-            },
-            
-            "day_2_capabilities": {
-                "docling_intelligence": settings.docling_enabled,
-                "team_workspaces": settings.enable_workspaces,
-                "chunk_level_analysis": True,
-                "german_industry_templates": True,
-                "enterprise_audit_reports": True
-            }
-        }
-        
-        logger.info(
-            "Health check completed",
-            status=health_status["status"],
-            database_connected=db_health.get("database_connected"),
-            tables_created=db_health.get("tables_created")
-        )
-        
-        return health_status
-        
-    except Exception as e:
-        logger.error("Health check failed", error=str(e))
-        
-        return {
-            "status": "unhealthy",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "error": str(e),
-            "version": "2.0.0"
-        }
-
-@app.get("/api/status")
-async def api_status():
-    """Detailed API status for monitoring and debugging"""
+async def simple_health_check():
+    """Simplified health check for debugging"""
     
     return {
-        "api_version": "2.0.0",
-        "service_name": "WolfMerge Enterprise Compliance Platform",
-        "deployment_info": {
-            "environment": settings.environment,
-            "eu_region": settings.eu_region,
-            "debug_mode": settings.debug,
-            "data_residency": settings.data_residency
-        },
-        
-        "feature_flags": {
-            "docling_enabled": settings.docling_enabled,
-            "workspaces_enabled": settings.enable_workspaces,
-            "audit_logging": settings.audit_logging,
-            "german_templates": True,
-            "chunk_analysis": True
-        },
-        
-        "api_capabilities": {
-            "backward_compatible": True,
-            "day_1_endpoints": "active",
-            "day_2_endpoints": "active",
-            "german_compliance": "specialized",
-            "enterprise_features": "full"
-        },
-        
-        "supported_formats": settings.allowed_extensions,
-        "supported_frameworks": ["gdpr", "soc2", "hipaa", "iso27001"],
-        "supported_languages": ["de", "en"],
-        
-        "limits": {
-            "max_file_size_mb": settings.max_file_size_mb,
-            "max_files_per_batch": settings.max_files_per_batch,
-            "max_workspace_size_mb": settings.max_workspace_size_mb,
-            "max_users_per_workspace": settings.max_users_per_workspace
-        }
+        "status": "healthy",
+        "version": "2.0.0-debug",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "debug_mode": True,
+        "day_1_features": "active",
+        "day_2_features": "disabled_for_debugging"
     }
 
-# Exception handlers for enterprise-grade error handling
-@app.exception_handler(404)
-async def not_found_handler(request: Request, exc):
-    """Custom 404 handler with helpful information"""
+@app.get("/debug")
+async def debug_info():
+    """Debug endpoint to check what's working"""
     
-    logger.warning(
-        "404 Not Found",
-        path=request.url.path,
-        method=request.method,
-        client_ip=request.client.host if request.client else None
-    )
+    try:
+        # Test basic imports
+        import openai
+        openai_available = True
+    except ImportError:
+        openai_available = False
     
-    return JSONResponse(
-        status_code=404,
-        content={
-            "error": "Not Found",
-            "message": f"The requested endpoint {request.url.path} was not found",
-            "available_endpoints": {
-                "day_1_api": "/api/compliance/*",
-                "day_2_api": "/api/v2/compliance/*",
-                "documentation": "/docs",
-                "health_check": "/health"
-            },
-            "timestamp": datetime.now(timezone.utc).isoformat()
+    try:
+        # Test if we can import our basic models
+        from app.models.compliance import ComplianceFramework
+        compliance_models_available = True
+    except ImportError:
+        compliance_models_available = False
+    
+    try:
+        # Test if we can import German detection
+        from app.utils.german_detection import GermanComplianceDetector
+        german_detection_available = True
+    except ImportError:
+        german_detection_available = False
+    
+    return {
+        "import_status": {
+            "openai": openai_available,
+            "compliance_models": compliance_models_available,
+            "german_detection": german_detection_available
+        },
+        "environment": {
+            "docling_enabled": getattr(settings, 'docling_enabled', False),
+            "eu_region": getattr(settings, 'eu_region', False),
+            "debug": getattr(settings, 'debug', False)
         }
-    )
-
-@app.exception_handler(500)
-async def internal_error_handler(request: Request, exc):
-    """Custom 500 handler with enterprise error tracking"""
-    
-    logger.error(
-        "500 Internal Server Error",
-        path=request.url.path,
-        method=request.method,
-        error=str(exc),
-        client_ip=request.client.host if request.client else None
-    )
-    
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal Server Error",
-            "message": "An unexpected error occurred while processing your request",
-            "support_info": {
-                "contact": "For support, please check the health endpoint: /health",
-                "documentation": "/docs",
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+    }
 
 if __name__ == "__main__":
     import uvicorn
     
-    # Configure for enterprise deployment
-    uvicorn_config = {
-        "app": "app.main:app",
-        "host": "0.0.0.0",
-        "port": 8000,
-        "reload": settings.debug,
-        "access_log": True,
-        "log_level": "info" if not settings.debug else "debug",
-        "workers": 1 if settings.debug else 4  # Single worker for debug, multiple for production
-    }
+    logger.info("Starting WolfMerge Debug Mode")
     
-    logger.info(
-        "Starting WolfMerge Enterprise Platform",
-        config=uvicorn_config,
-        version="2.0.0",
-        day="Day 2 - Enterprise Cloud Platform"
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,  # Enable reload for debugging
+        log_level="debug"
     )
-    
-    uvicorn.run(**uvicorn_config)
