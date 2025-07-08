@@ -1,4 +1,4 @@
-# app/services/docling_processor.py - Day 2 Document Intelligence
+# app/services/docling_processor.py - Day 2 Document Intelligence (Optimized)
 import hashlib
 import tempfile
 import os
@@ -8,35 +8,19 @@ from pathlib import Path
 from datetime import datetime, timezone
 import structlog
 
-try:
-    from docling.document_converter import DocumentConverter
-    from docling.datamodel.base_models import InputFormat
-    from docling.datamodel.document import Document as DoclingDocument
-    DOCLING_AVAILABLE = True
-except ImportError:
-    DOCLING_AVAILABLE = False
-    logger = structlog.get_logger()
-    logger.warning("Docling not available - using fallback text processing")
-
+# Use smart Docling management for faster builds
+from app.utils.smart_docling import smart_docling, get_docling_converter, should_use_docling
 from app.utils.german_detection import GermanComplianceDetector
 from app.config import settings
 
 logger = structlog.get_logger()
 
 class DoclingProcessor:
-    """Enhanced document processing with Docling intelligence for German compliance"""
+    """Enhanced document processing with smart Docling intelligence"""
     
     def __init__(self):
-        # FIXED: Check if Docling is available before initializing
-        if DOCLING_AVAILABLE:
-            try:
-                self.converter = DocumentConverter()
-            except Exception as e:
-                logger.warning(f"Failed to initialize Docling converter: {e}")
-                self.converter = None
-        else:
-            self.converter = None
-            
+        # Use smart Docling manager instead of direct initialization
+        self.smart_docling = smart_docling
         self.detector = GermanComplianceDetector()
         self.supported_formats = {
             '.pdf': 'pdf',
@@ -46,6 +30,11 @@ class DoclingProcessor:
             '.md': 'markdown'
         }
         
+        logger.info(
+            "DoclingProcessor initialized",
+            docling_status=self.smart_docling.get_status()
+        )
+        
     async def process_document(
         self, 
         file_content: bytes, 
@@ -54,20 +43,20 @@ class DoclingProcessor:
         user_id: str
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
-        Process document with Docling for intelligent chunking
-        Returns: (chunks, metadata)
+        Process document with smart Docling intelligence
+        Automatically chooses optimal processing method
         """
         
         start_time = datetime.now(timezone.utc)
         file_extension = Path(filename).suffix.lower()
+        file_size = len(file_content)
         
         logger.info(
-            "Starting document processing",
+            "Starting smart document processing",
             filename=filename,
-            file_size=len(file_content),
+            file_size=file_size,
             workspace_id=workspace_id,
-            user_id=user_id,
-            docling_available=DOCLING_AVAILABLE
+            docling_available=self.smart_docling.docling_available
         )
         
         # Validate file format
@@ -77,67 +66,107 @@ class DoclingProcessor:
         # Create content hash for deduplication
         content_hash = hashlib.sha256(file_content).hexdigest()
         
-        # FIXED: If Docling is not available or is text/markdown, use fallback immediately
-        if not DOCLING_AVAILABLE or not self.converter or file_extension in ['.txt', '.md']:
+        # Smart decision: use Docling or fallback?
+        processing_mode = self.smart_docling.get_processing_mode(filename, file_size)
+        use_docling = should_use_docling(filename, file_size)
+        
+        logger.info(
+            "Processing mode selected",
+            filename=filename,
+            processing_mode=processing_mode,
+            use_docling=use_docling,
+            environment=self.smart_docling.environment
+        )
+        
+        # Use appropriate processing method
+        if use_docling and self.smart_docling.docling_available:
+            return await self._process_with_smart_docling(
+                file_content, filename, content_hash, workspace_id, processing_mode
+            )
+        else:
             return await self._process_with_fallback(
                 file_content, filename, content_hash, workspace_id
             )
+    
+    async def _process_with_smart_docling(
+        self,
+        file_content: bytes,
+        filename: str,
+        content_hash: str,
+        workspace_id: str,
+        processing_mode: str
+    ) -> Tuple[List[Dict], Dict[str, Any]]:
+        """Process with Docling using smart configuration"""
         
-        # Create temporary file for Docling processing
         temp_file = None
         temp_path = None
         
         try:
-            with tempfile.NamedTemporaryFile(
-                suffix=file_extension,
-                delete=False
-            ) as temp_file:
+            # Create temporary file
+            file_extension = Path(filename).suffix.lower()
+            with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False) as temp_file:
                 temp_file.write(file_content)
                 temp_path = temp_file.name
             
-            # Convert document with Docling
-            docling_result = await self._convert_with_docling(temp_path, filename)
-            
-            if docling_result:
-                # Extract document metadata
-                document_metadata = await self._extract_document_metadata(
-                    docling_result, filename, content_hash, len(file_content)
-                )
-                
-                # Create intelligent chunks
-                chunks = await self._create_intelligent_chunks(
-                    docling_result, filename, workspace_id
-                )
-            else:
-                # Docling failed, use fallback
+            # Get smart Docling converter
+            converter = get_docling_converter()
+            if not converter:
+                logger.warning("Smart Docling converter not available, using fallback")
                 return await self._process_with_fallback(
                     file_content, filename, content_hash, workspace_id
                 )
             
-            processing_time = (datetime.now(timezone.utc) - start_time).total_seconds()
+            # Convert document with environment-appropriate settings
+            docling_start = datetime.now(timezone.utc)
+            docling_result = await self._convert_with_smart_docling(
+                temp_path, filename, converter, processing_mode
+            )
+            docling_time = (datetime.now(timezone.utc) - docling_start).total_seconds()
             
-            logger.info(
-                "Document processing completed",
-                filename=filename,
-                chunk_count=len(chunks),
-                processing_time=processing_time,
-                german_content_detected=document_metadata.get('german_content_detected', False)
+            if not docling_result:
+                logger.warning("Smart Docling conversion failed, using fallback")
+                return await self._process_with_fallback(
+                    file_content, filename, content_hash, workspace_id
+                )
+            
+            # Extract metadata with smart processing info
+            metadata = await self._extract_smart_document_metadata(
+                docling_result, filename, content_hash, len(file_content), 
+                processing_mode, docling_time
             )
             
-            # Add processing metadata
-            document_metadata.update({
+            # Create intelligent chunks
+            chunks = await self._create_intelligent_chunks(
+                docling_result, filename, workspace_id
+            )
+            
+            processing_time = (datetime.now(timezone.utc) - docling_start).total_seconds()
+            
+            logger.info(
+                "Smart Docling processing completed",
+                filename=filename,
+                processing_mode=processing_mode,
+                docling_time=docling_time,
+                total_time=processing_time,
+                chunks_created=len(chunks)
+            )
+            
+            # Add smart processing metadata
+            metadata.update({
                 'processing_time_seconds': processing_time,
                 'chunk_count': len(chunks),
-                'docling_version': '1.0.0' if DOCLING_AVAILABLE else 'fallback',
-                'processed_at': start_time.isoformat()
+                'docling_version': 'smart_1.0.0',
+                'processing_mode': processing_mode,
+                'processed_at': datetime.now(timezone.utc).isoformat()
             })
             
-            return chunks, document_metadata
+            return chunks, metadata
             
         except Exception as e:
             logger.error(
-                "Document processing failed, using fallback",
+                "Smart Docling processing failed",
                 filename=filename,
+                processing_mode=processing_mode,
                 error=str(e)
             )
             return await self._process_with_fallback(
@@ -151,6 +180,84 @@ class DoclingProcessor:
                     os.unlink(temp_path)
                 except Exception as e:
                     logger.warning("Failed to cleanup temp file", temp_path=temp_path, error=str(e))
+
+    async def _convert_with_smart_docling(
+        self,
+        file_path: str,
+        filename: str,
+        converter,
+        processing_mode: str
+    ) -> Optional[Any]:
+        """Convert document using smart Docling with mode-specific optimizations"""
+        
+        try:
+            # Run conversion in thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            
+            if processing_mode == "docling_fast":
+                # Fast mode: minimal processing for development
+                logger.debug("Using Docling fast mode", filename=filename)
+                
+            elif processing_mode == "docling_full":
+                # Full mode: complete processing for production
+                logger.debug("Using Docling full mode", filename=filename)
+            
+            # Convert document
+            docling_result = await loop.run_in_executor(
+                None, 
+                converter.convert, 
+                file_path
+            )
+            
+            # Check if conversion was successful
+            if hasattr(docling_result, 'document'):
+                return docling_result.document
+            else:
+                logger.warning(
+                    "Smart Docling conversion returned unexpected result",
+                    filename=filename,
+                    result_type=type(docling_result),
+                    processing_mode=processing_mode
+                )
+                return None
+                
+        except Exception as e:
+            logger.error(
+                "Smart Docling conversion failed",
+                filename=filename,
+                processing_mode=processing_mode,
+                error=str(e)
+            )
+            return None
+    
+    async def _extract_smart_document_metadata(
+        self,
+        docling_result: Any,
+        filename: str,
+        content_hash: str,
+        file_size: int,
+        processing_mode: str,
+        docling_time: float
+    ) -> Dict[str, Any]:
+        """Extract metadata with smart processing information"""
+        
+        # Get base metadata using existing method
+        metadata = await self._extract_document_metadata(
+            docling_result, filename, content_hash, file_size
+        )
+        
+        # Add smart processing information
+        metadata.update({
+            'smart_processing': {
+                'mode': processing_mode,
+                'docling_time': docling_time,
+                'environment': self.smart_docling.environment,
+                'lazy_load': self.smart_docling.lazy_load,
+                'skip_heavy_models': self.smart_docling.skip_heavy_models
+            }
+        })
+        
+        return metadata
     
     async def _process_with_fallback(
         self,
@@ -223,7 +330,8 @@ class DoclingProcessor:
     ) -> Optional[Any]:
         """Convert document using Docling with error handling"""
         
-        if not self.converter:
+        converter = get_docling_converter()
+        if not converter:
             return None
             
         try:
@@ -231,7 +339,7 @@ class DoclingProcessor:
             loop = asyncio.get_event_loop()
             docling_result = await loop.run_in_executor(
                 None, 
-                self.converter.convert, 
+                converter.convert, 
                 file_path
             )
             

@@ -1,4 +1,4 @@
-# app/main.py - Day 2 Enhanced Enterprise Application (Railway Fixed)
+# app/main.py
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -15,6 +15,7 @@ from app.config import settings
 from app.routers import compliance  # Day 1 router (backward compatibility)
 from app.routers import enhanced_compliance  # Day 2 enterprise router
 from app.database import create_tables, init_demo_data, health_check
+from app.utils.smart_docling import get_docling_status  # NEW: Added for Smart Docling check
 
 # Configure structured logging
 structlog.configure(
@@ -341,7 +342,8 @@ async def health_check_endpoint():
             "api_server": True,  # Always true if we get here
             "database": False,
             "openai": False,
-            "docling": False
+            "docling": False,
+            "smart_docling": False  # NEW: Added Smart Docling check
         }
         
         # Check database
@@ -357,6 +359,10 @@ async def health_check_endpoint():
         
         # Check Docling (simple check - see if it's enabled)
         service_checks["docling"] = settings.docling_enabled
+        
+        # NEW: Check Smart Docling
+        docling_status = get_docling_status()
+        service_checks["smart_docling"] = docling_status["docling_available"]
         
         # Overall system health
         all_healthy = all([
@@ -374,6 +380,8 @@ async def health_check_endpoint():
             "core_services": service_checks,
             
             "database_details": db_health,
+            
+            "smart_docling_status": docling_status,  # NEW: Added Smart Docling status
             
             "compliance_features": {
                 "german_dsgvo_analysis": "active",
@@ -520,15 +528,4 @@ async def internal_error_handler(request: Request, exc):
         headers={
             "X-Request-ID": request_id
         }
-    )
-
-# OPTIONAL: Local development runner (Railway doesn't need this)
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(
-        "app.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="debug"
     )

@@ -1,0 +1,86 @@
+# .dockerignore - Reduce Railway build context
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Documentation and logs
+README.md
+docs/
+*.log
+*.txt
+20250707_1942-day2_completion_handoff.md
+merged_technical_roadmap.md
+days_3_4_tech_implementation.md
+User\ Workflow\ 1.md
+Auto-workflow-2.md
+WolfMerge\ Smart\ UI\ Flow.md
+environment\ variables-dev-backend_and_database-20250707-1545.txt
+
+# Test files
+tests/
+test_*
+*_test.py
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Development files
+.env.example
+.env.local
+.env.development
+
+# Frontend (if any)
+frontend/
+node_modules/
+npm-debug.log*
+
+# Large files
+*.zip
+*.tar.gz
+*.sql
+*.dump
