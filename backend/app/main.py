@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 import structlog
 import traceback
 import uuid
-from fastapi import FastAPI, Request
+import json
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
@@ -16,6 +17,7 @@ from app.routers import compliance  # Day 1 router (backward compatibility)
 from app.routers import enhanced_compliance  # Day 2 enterprise router
 from app.database import create_tables, init_demo_data, health_check
 from app.utils.smart_docling import get_docling_status  # NEW: Added for Smart Docling check
+from app.services.websocket.manager import websocket_manager
 
 # Configure structured logging
 structlog.configure(
@@ -227,6 +229,76 @@ app.include_router(
     tags=["Day 2 - Enterprise Features with Docling Intelligence"]
 )
 
+@app.websocket("/ws/{workspace_id}")
+async def websocket_endpoint(websocket: WebSocket, workspace_id: str):
+    """
+    Day 3: Real-time progress tracking WebSocket endpoint
+    
+    Provides live updates for:
+    - Document processing progress
+    - Batch status updates
+    - UI context intelligence
+    - Performance metrics
+    - Error notifications
+    """
+    
+    connection_id = None
+    
+    try:
+        # Establish WebSocket connection
+        connection_id = await websocket_manager.connect(websocket, workspace_id)
+        
+        logger.info(
+            "WebSocket connection established",
+            workspace_id=workspace_id,
+            connection_id=connection_id
+        )
+        
+        # Keep connection alive and handle messages
+        while True:
+            try:
+                # Wait for client messages (ping/pong, etc.)
+                data = await websocket.receive_text()
+                
+                # Handle client messages if needed
+                try:
+                    message = json.loads(data)
+                    if message.get("type") == "ping":
+                        await websocket.send_text(json.dumps({
+                            "type": "pong",
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        }))
+                except json.JSONDecodeError:
+                    pass  # Ignore invalid JSON
+                    
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.warning(
+                    "WebSocket message handling error",
+                    workspace_id=workspace_id,
+                    connection_id=connection_id,
+                    error=str(e)
+                )
+                break
+                
+    except Exception as e:
+        logger.error(
+            "WebSocket connection error",
+            workspace_id=workspace_id,
+            error=str(e)
+        )
+    finally:
+        # Clean up connection
+        if connection_id:
+            websocket_manager.disconnect(workspace_id, connection_id)
+            
+            logger.info(
+                "WebSocket connection closed",
+                workspace_id=workspace_id,
+                connection_id=connection_id
+            )
+
 # Comprehensive exception handler
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
@@ -383,6 +455,12 @@ async def health_check_endpoint():
             
             "smart_docling_status": docling_status,  # NEW: Added Smart Docling status
             
+            "websocket_status": {
+                "manager_active": True,
+                "active_connections": websocket_manager.active_connections,
+                "active_workspaces": len(websocket_manager.connections)
+            },
+            
             "compliance_features": {
                 "german_dsgvo_analysis": "active",
                 "multi_framework_support": "active", 
@@ -461,6 +539,31 @@ async def api_status():
             "max_files_per_batch": settings.max_files_per_batch,
             "max_workspace_size_mb": settings.max_workspace_size_mb,
             "max_users_per_workspace": settings.max_users_per_workspace
+        }
+    }
+
+@app.get("/api/v2/websocket/stats")
+async def get_websocket_stats():
+    """Get WebSocket connection statistics"""
+    
+    return {
+        "websocket_stats": websocket_manager.get_manager_stats(),
+        "day3_features": {
+            "real_time_progress": True,
+            "ui_context_updates": True,
+            "performance_monitoring": True,
+            "error_notifications": True
+        },
+        "connection_info": {
+            "endpoint": "/ws/{workspace_id}",
+            "supported_messages": [
+                "job_progress",
+                "batch_started", 
+                "batch_completed",
+                "ui_context_update",
+                "performance_update",
+                "error_notification"
+            ]
         }
     }
 
