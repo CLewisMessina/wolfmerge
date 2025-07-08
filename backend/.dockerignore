@@ -1,4 +1,4 @@
-# .dockerignore - Reduce Railway build context
+# .dockerignore - Fixed to allow requirements.txt
 
 # Python cache
 __pycache__/
@@ -48,18 +48,11 @@ Thumbs.db
 .git/
 .gitignore
 
-# Documentation and logs
+# Documentation and logs - SPECIFIC FILES ONLY (not *.txt)
 README.md
 docs/
 *.log
-*.txt
-20250707_1942-day2_completion_handoff.md
-merged_technical_roadmap.md
-days_3_4_tech_implementation.md
-User\ Workflow\ 1.md
-Auto-workflow-2.md
-WolfMerge\ Smart\ UI\ Flow.md
-environment\ variables-dev-backend_and_database-20250707-1545.txt
+
 
 # Test files
 tests/
@@ -84,3 +77,6 @@ npm-debug.log*
 *.tar.gz
 *.sql
 *.dump
+
+# IMPORTANT: Don't exclude requirements.txt!
+# Removed: *.txt (this was blocking requirements.txt)
