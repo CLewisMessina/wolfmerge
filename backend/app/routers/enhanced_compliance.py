@@ -1,12 +1,26 @@
-# ADD TO TOP OF app/routers/enhanced_compliance.py
+# app/routers/enhanced_compliance.py
+from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request, Depends
+from typing import List
+from datetime import datetime, timezone
+from sqlalchemy.ext.asyncio import AsyncSession
+import structlog
 
-# Add these imports after existing imports:
+from app.models.compliance import AnalysisResponse, ComplianceFramework, DocumentAnalysis, ComplianceReport, DocumentLanguage
+from app.services.file_processor import FileProcessor
+from app.services.enhanced_compliance_analyzer import EnhancedComplianceAnalyzer
+from app.database import get_db_session, DEMO_WORKSPACE_ID, DEMO_ADMIN_USER_ID
+from app.config import settings
+
+# Day 3 Parallel Processing Imports
 from app.services.parallel_processing import (
     JobQueue, BatchProcessor, UIContextLayer, PerformanceMonitor
 )
 from app.services.websocket.progress_handler import progress_handler
 
-# REPLACE the analyze_compliance_with_enterprise_features function with this:
+# Initialize router
+router = APIRouter(prefix="/api/v2/compliance", tags=["Day 2 - Enterprise Features with Docling Intelligence"])
+
+logger = structlog.get_logger()
 
 @router.post("/analyze", response_model=AnalysisResponse)
 async def analyze_compliance_with_enterprise_features(
@@ -210,11 +224,9 @@ async def analyze_compliance_with_enterprise_features(
             detail=f"Enhanced compliance analysis failed: {str(e)}"
         )
 
-# ADD these helper functions at the end of the file:
-
+# Helper functions
 def _create_error_analysis(result) -> DocumentAnalysis:
     """Create error analysis for failed processing result"""
-    from app.models.compliance import DocumentAnalysis, DocumentLanguage
     
     return DocumentAnalysis(
         filename=result.job.filename,
@@ -236,8 +248,6 @@ async def _create_enhanced_compliance_report(
     workspace_id: str
 ) -> ComplianceReport:
     """Create enhanced compliance report with Day 3 intelligence"""
-    
-    from app.models.compliance import ComplianceReport, DocumentLanguage
     
     # Calculate enhanced metrics
     german_documents = sum(
@@ -321,3 +331,74 @@ def _calculate_performance_grade(results) -> str:
         return "D"
     else:
         return "F"
+
+# Keep existing endpoints for backward compatibility
+@router.get("/health")
+async def enhanced_health_check():
+    """Enhanced health check for Day 2 enterprise features"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "day3_features": {
+            "parallel_processing": True,
+            "ui_context_intelligence": True,
+            "performance_monitoring": True,
+            "websocket_progress": True
+        }
+    }
+
+@router.get("/frameworks")
+async def get_supported_frameworks():
+    """Get list of supported compliance frameworks with Day 3 enhancements"""
+    return {
+        "supported_frameworks": [
+            {
+                "id": "gdpr",
+                "name": "DSGVO / GDPR",
+                "description": "EU-Datenschutzgrundverordnung / EU Data Protection Regulation",
+                "region": "European Union",
+                "german_support": True,
+                "day3_features": {
+                    "parallel_processing": True,
+                    "ui_context_detection": True,
+                    "german_priority": True
+                }
+            },
+            {
+                "id": "soc2",
+                "name": "SOC 2",
+                "description": "Security, availability, and confidentiality controls",
+                "region": "Global (US-originated)",
+                "german_support": False,
+                "day3_features": {
+                    "parallel_processing": True,
+                    "ui_context_detection": True,
+                    "german_priority": False
+                }
+            },
+            {
+                "id": "hipaa",
+                "name": "HIPAA",
+                "description": "Healthcare information privacy and security",
+                "region": "United States",
+                "german_support": False,
+                "day3_features": {
+                    "parallel_processing": True,
+                    "ui_context_detection": True,
+                    "german_priority": False
+                }
+            },
+            {
+                "id": "iso27001",
+                "name": "ISO 27001",
+                "description": "Information security management systems",
+                "region": "Global",
+                "german_support": False,
+                "day3_features": {
+                    "parallel_processing": True,
+                    "ui_context_detection": True,
+                    "german_priority": False
+                }
+            }
+        ]
+    }
