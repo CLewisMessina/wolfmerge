@@ -1,4 +1,4 @@
-# requirements.txt - Railway Build Optimized (keeps Docling)
+# requirements.txt - Fixed dependency conflicts
 
 # Core FastAPI - Install first for better caching
 fastapi==0.104.1
@@ -14,7 +14,7 @@ sqlalchemy[asyncio]==2.0.23
 # AI processing core
 openai==1.3.7
 pydantic==2.5.0
-pydantic-settings==2.1.0
+pydantic-settings>=2.3.0,<3.0.0  # FIXED: Updated for Docling compatibility
 
 # Authentication and security (lightweight)
 python-jose[cryptography]==3.3.0
@@ -33,8 +33,8 @@ psycopg2-binary==2.9.9
 python-magic==0.4.27
 python-docx==0.8.11
 
-# Docling - Keep but install efficiently
-docling>=1.0.0
+# Docling - Pin to stable version to avoid conflicts
+docling==1.8.0  # FIXED: Pin to specific working version
 docling-core>=1.0.0
 pymupdf==1.23.8
 
