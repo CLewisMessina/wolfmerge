@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 from enum import Enum
 import structlog
+import re
 
 from .job_queue import DocumentJob
 from ..docling_processor import DoclingProcessor
@@ -231,6 +232,35 @@ class UIContextLayer:
                 'berlin', 'hauptstadt', 'government', 'regierung'
             ]
         }
+    
+    # NEW METHOD: German content detection for authority activation
+    async def _detect_german_content(self, content: str) -> bool:
+        """Quick German content detection for authority activation"""
+        
+        german_indicators = [
+            "dsgvo", "datenschutz", "verarbeitung", "einwilligung",
+            "personenbezogene daten", "betroffenenrechte", "dsfa",
+            "aufsichtsbehörde", "rechtsgrundlage", "artikel",
+            "datenschutzbeauftragte", "datenschutzbeauftragter",
+            "auftragsverarbeitung", "gemeinsame verantwortlichkeit",
+            "datenschutz-folgenabschätzung", "verfahrensverzeichnis"
+        ]
+        
+        content_lower = content.lower() if isinstance(content, str) else str(content).lower()
+        german_count = sum(1 for indicator in german_indicators if indicator in content_lower)
+        
+        # Also check for German legal article references
+        article_patterns = [
+            r"art\.\s*\d+", r"artikel\s*\d+", r"abs\.\s*\d+",
+            r"§\s*\d+", r"bdsg", r"tmg"
+        ]
+        
+        article_matches = sum(1 for pattern in article_patterns 
+                             if re.search(pattern, content_lower))
+        
+        logger.debug(f"German content detection: {german_count} terms, {article_matches} articles")
+        
+        return german_count >= 2 or article_matches >= 1
     
     def analyze_ui_context(self, jobs: List[DocumentJob]) -> UIContext:
         """Analyze document jobs to create intelligent UI context"""

@@ -73,6 +73,65 @@ class Big4AuthorityDetector:
         
         logger.info("Big 4 Authority Detector initialized")
     
+    # NEW METHOD: Enhanced industry detection for DSFA and compliance documents
+    async def detect_industry_from_content(self, documents: List[Document]) -> str:
+        """Enhanced industry detection for DSFA and compliance documents"""
+        
+        industry_indicators = {
+            "automotive": [
+                "fahrzeug", "vehicle", "automotive", "telematics", "connected car",
+                "kundenprofiling", "customer profiling", "produktempfehlung",
+                "bmw", "audi", "mercedes", "porsche", "bosch", "continental",
+                "kba", "kraftfahrt", "kfz", "mobilität", "verkehr"
+            ],
+            "retail": [
+                "kundenprofiling", "customer profiling", "produktempfehlung", 
+                "personalisierte", "personalized", "recommendation", "shopping",
+                "einzelhandel", "verkauf", "kunden", "marketing", "e-commerce",
+                "online-shop", "vertrieb", "handel"
+            ],
+            "healthcare": [
+                "patient", "medical", "health", "hospital", "gesundheit",
+                "krankenhaus", "arzt", "medizin", "pflege", "behandlung"
+            ],
+            "manufacturing": [
+                "produktion", "manufacturing", "fertigung", "fabrik",
+                "industrie", "herstellung", "maschinenbau", "anlage"
+            ],
+            "fintech": [
+                "payment", "banking", "financial", "kredit", "versicherung",
+                "finanz", "zahlung", "bank", "geld"
+            ],
+            "software": [
+                "software", "app", "platform", "saas", "digital", "cloud",
+                "api", "system", "entwicklung", "programmierung"
+            ]
+        }
+        
+        combined_content = " ".join([doc.content.lower() for doc in documents])
+        
+        industry_scores = {}
+        for industry, indicators in industry_indicators.items():
+            score = sum(1 for indicator in indicators if indicator in combined_content)
+            industry_scores[industry] = score
+            
+            # Bonus for specific high-value combinations
+            if industry == "automotive" and "kundenprofiling" in combined_content:
+                industry_scores[industry] += 3
+            elif industry == "retail" and "produktempfehlung" in combined_content:
+                industry_scores[industry] += 2
+        
+        logger.info(f"Industry detection scores: {industry_scores}")
+        
+        if industry_scores:
+            best_industry = max(industry_scores, key=industry_scores.get)
+            if industry_scores[best_industry] >= 2:
+                logger.info(f"Industry detected: {best_industry} (score: {industry_scores[best_industry]})")
+                return best_industry
+        
+        logger.info("No clear industry detected")
+        return "unknown"
+    
     async def detect_relevant_authorities(
         self,
         documents: List[Document],
