@@ -17,6 +17,9 @@ from app.services.parallel_processing import (
 )
 from app.services.websocket.progress_handler import progress_handler
 
+# German Authority Engine Import
+from app.services.german_authority_engine import GermanAuthorityEngine, get_all_authorities
+
 # Initialize router
 router = APIRouter(prefix="/api/v2/compliance", tags=["Day 2 - Enterprise Features with Docling Intelligence"])
 
@@ -224,6 +227,81 @@ async def analyze_compliance_with_enterprise_features(
             detail=f"Enhanced compliance analysis failed: {str(e)}"
         )
 
+@router.get("/german-authorities")
+async def get_german_authorities():
+    """Get all German data protection authorities"""
+    return {
+        "authorities": [
+            {"id": k.value, "name": v.name} 
+            for k, v in get_all_authorities().items()
+        ]
+    }
+
+@router.post("/analyze-authority/{authority_id}")
+async def analyze_authority_specific(
+    authority_id: str,
+    files: List[UploadFile] = File(...),
+    industry: str = Form(None)
+):
+    """Analyze documents for specific German authority compliance"""
+    
+    # Process files (reuse existing file processing logic)
+    documents = []
+    for file in files:
+        # Validate file type
+        if not any(file.filename.lower().endswith(ext) for ext in settings.allowed_extensions):
+            raise HTTPException(
+                status_code=400,
+                detail=f"File type not supported: {file.filename}. "
+                       f"Allowed: {', '.join(settings.allowed_extensions)}"
+            )
+        
+        # Read and decode content
+        content = await file.read()
+        
+        # Create document object for analysis
+        doc = type('Document', (), {
+            'filename': file.filename,
+            'content': content.decode('utf-8', errors='ignore'),
+            'file_size': len(content)
+        })()
+        documents.append(doc)
+    
+    # Analyze with German Authority Engine
+    try:
+        engine = GermanAuthorityEngine()
+        analysis = await engine.analyze_for_authority(documents, authority_id, industry)
+        
+        return {
+            "authority": analysis.authority_name,
+            "jurisdiction": analysis.jurisdiction,
+            "compliance_score": analysis.compliance_score,
+            "requirements_met": analysis.requirements_met,
+            "requirements_missing": analysis.requirements_missing,
+            "priority_actions": analysis.priority_actions,
+            "audit_readiness": analysis.audit_readiness,
+            "penalty_risk": analysis.penalty_risk,
+            "industry_focus": industry,
+            "analysis_timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid authority ID: {authority_id}. {str(e)}"
+        )
+    except Exception as e:
+        logger.error(
+            "German authority analysis failed",
+            authority_id=authority_id,
+            industry=industry,
+            error=str(e)
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Authority-specific analysis failed: {str(e)}"
+        )
+
 # Helper functions
 def _create_error_analysis(result) -> DocumentAnalysis:
     """Create error analysis for failed processing result"""
@@ -343,7 +421,8 @@ async def enhanced_health_check():
             "parallel_processing": True,
             "ui_context_intelligence": True,
             "performance_monitoring": True,
-            "websocket_progress": True
+            "websocket_progress": True,
+            "german_authority_analysis": True
         }
     }
 
@@ -361,7 +440,8 @@ async def get_supported_frameworks():
                 "day3_features": {
                     "parallel_processing": True,
                     "ui_context_detection": True,
-                    "german_priority": True
+                    "german_priority": True,
+                    "authority_specific_analysis": True
                 }
             },
             {
@@ -373,7 +453,8 @@ async def get_supported_frameworks():
                 "day3_features": {
                     "parallel_processing": True,
                     "ui_context_detection": True,
-                    "german_priority": False
+                    "german_priority": False,
+                    "authority_specific_analysis": False
                 }
             },
             {
@@ -385,7 +466,8 @@ async def get_supported_frameworks():
                 "day3_features": {
                     "parallel_processing": True,
                     "ui_context_detection": True,
-                    "german_priority": False
+                    "german_priority": False,
+                    "authority_specific_analysis": False
                 }
             },
             {
@@ -397,7 +479,8 @@ async def get_supported_frameworks():
                 "day3_features": {
                     "parallel_processing": True,
                     "ui_context_detection": True,
-                    "german_priority": False
+                    "german_priority": False,
+                    "authority_specific_analysis": False
                 }
             }
         ]
