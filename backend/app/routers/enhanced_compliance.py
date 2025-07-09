@@ -1,6 +1,6 @@
 # app/routers/enhanced_compliance.py
-from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request, Depends
-from typing import List
+from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request, Depends, Query
+from typing import List, Optional
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
@@ -20,10 +20,18 @@ from app.services.websocket.progress_handler import progress_handler
 # German Authority Engine Import
 from app.services.german_authority_engine import GermanAuthorityEngine, get_all_authorities
 
+# Big 4 Authority Engine Integration
+from app.services.german_authority_engine.integration.authority_endpoints import (
+    Big4AuthorityEndpoints, create_big4_authority_endpoints
+)
+
 # Initialize router
 router = APIRouter(prefix="/api/v2/compliance", tags=["Day 2 - Enterprise Features with Docling Intelligence"])
 
 logger = structlog.get_logger()
+
+# Initialize Big 4 Engine
+big4_endpoints = create_big4_authority_endpoints()
 
 @router.post("/analyze", response_model=AnalysisResponse)
 async def analyze_compliance_with_enterprise_features(
@@ -227,6 +235,162 @@ async def analyze_compliance_with_enterprise_features(
             detail=f"Enhanced compliance analysis failed: {str(e)}"
         )
 
+# =============================================================================
+# BIG 4 GERMAN AUTHORITY ENDPOINTS - Added for Enhanced Authority Analysis
+# =============================================================================
+
+@router.post("/analyze-with-authority-detection")
+async def analyze_with_authority_detection(
+    files: List[UploadFile] = File(...),
+    industry: Optional[str] = Form(None),
+    company_location: Optional[str] = Form(None), 
+    company_size: Optional[str] = Form(None),
+    workspace_id: str = Form(default=DEMO_WORKSPACE_ID),
+    db: AsyncSession = Depends(get_db_session)
+):
+    """
+    🧠 Smart Authority Detection + Analysis
+    
+    Automatically detects relevant Big 4 German authorities and provides
+    comprehensive analysis with multi-authority comparison.
+    
+    Enhanced Features:
+    - Intelligent authority detection based on content and business context
+    - Multi-authority comparison and optimization recommendations
+    - Industry-specific compliance templates
+    - Authority-specific penalty risk assessment
+    """
+    return await big4_endpoints.analyze_with_smart_detection(
+        files=files,
+        industry=industry,
+        company_location=company_location,
+        company_size=company_size,
+        workspace_id=workspace_id,
+        db=db
+    )
+
+@router.post("/analyze-authority/{authority_id}")
+async def analyze_authority_specific(
+    authority_id: str,
+    files: List[UploadFile] = File(...),
+    industry: Optional[str] = Form(None),
+    company_size: Optional[str] = Form(None),
+    workspace_id: str = Form(default=DEMO_WORKSPACE_ID),
+    db: AsyncSession = Depends(get_db_session)
+):
+    """
+    🎯 Authority-Specific Compliance Analysis
+    
+    Detailed analysis for specific Big 4 German authority with
+    enforcement patterns, penalty estimates, and audit preparation.
+    
+    Supported Authorities:
+    - bfdi: Federal Commissioner (BfDI)
+    - baylda: Bavaria (BayLDA) - Automotive focus
+    - lfd_bw: Baden-Württemberg (LfD BW) - Software focus  
+    - ldi_nrw: North Rhine-Westphalia (LDI NRW) - Manufacturing focus
+    """
+    return await big4_endpoints.analyze_for_specific_authority(
+        authority_id=authority_id,
+        files=files,
+        industry=industry,
+        company_size=company_size,
+        workspace_id=workspace_id,
+        db=db
+    )
+
+@router.post("/compare-authorities")
+async def compare_authority_compliance(
+    files: List[UploadFile] = File(...),
+    authorities: List[str] = Form(...),
+    industry: Optional[str] = Form(None),
+    company_size: Optional[str] = Form(None),
+    workspace_id: str = Form(default=DEMO_WORKSPACE_ID),
+    db: AsyncSession = Depends(get_db_session)
+):
+    """
+    ⚖️ Multi-Authority Compliance Comparison
+    
+    Compare compliance analysis across multiple Big 4 authorities
+    to optimize jurisdiction strategy and identify best practices.
+    
+    Features:
+    - Side-by-side authority comparison
+    - Jurisdiction optimization recommendations
+    - Cost-benefit analysis for compliance strategies
+    - Implementation roadmap for optimal compliance
+    """
+    return await big4_endpoints.compare_authorities(
+        files=files,
+        authorities=authorities,
+        industry=industry,
+        company_size=company_size,
+        workspace_id=workspace_id,
+        db=db
+    )
+
+@router.get("/authorities/detect-from-business")
+async def detect_authorities_from_business(
+    company_location: str = Query(..., description="Company location (e.g., 'bayern', 'baden_wurttemberg')"),
+    industry: str = Query(..., description="Industry (e.g., 'automotive', 'software', 'manufacturing')"),
+    company_size: str = Query(..., description="Company size ('small', 'medium', 'large')"),
+    business_activities: Optional[List[str]] = Query(None, description="Specific business activities")
+):
+    """
+    🔍 Business Profile Authority Detection
+    
+    Detect relevant German authorities based on business profile
+    without requiring document upload. Perfect for onboarding.
+    
+    Use Cases:
+    - Initial authority identification during onboarding
+    - Strategic jurisdiction planning
+    - Compliance planning before document creation
+    """
+    return await big4_endpoints.detect_relevant_authorities(
+        company_location=company_location,
+        industry=industry,
+        company_size=company_size,
+        business_activities=business_activities
+    )
+
+@router.get("/templates/industry/{industry}")
+async def get_industry_compliance_template(
+    industry: str,
+    authority: Optional[str] = Query(None, description="Specific authority for customized template")
+):
+    """
+    📋 Industry-Specific Compliance Templates
+    
+    Get pre-configured compliance templates for German industries
+    with authority-specific requirements and best practices.
+    
+    Supported Industries:
+    - automotive: Connected vehicles, supplier agreements
+    - software: Privacy by design, API compliance
+    - manufacturing: IoT compliance, employee monitoring
+    - healthcare: Patient data, medical research
+    """
+    return await big4_endpoints.get_industry_template(
+        industry=industry,
+        authority=authority
+    )
+
+@router.get("/authorities/big4")
+async def get_big4_authorities():
+    """
+    🏛️ Big 4 German Authorities Information
+    
+    Complete information about the Big 4 German data protection authorities
+    including enforcement patterns, contact information, and specializations.
+    
+    Coverage:
+    - 70% of German SME market
+    - All major German business centers
+    - Industry-specific enforcement expertise
+    """
+    return await big4_endpoints.get_all_big4_authorities_info()
+
 @router.get("/german-authorities")
 async def get_german_authorities():
     """Get all German data protection authorities"""
@@ -236,71 +400,6 @@ async def get_german_authorities():
             for k, v in get_all_authorities().items()
         ]
     }
-
-@router.post("/analyze-authority/{authority_id}")
-async def analyze_authority_specific(
-    authority_id: str,
-    files: List[UploadFile] = File(...),
-    industry: str = Form(None)
-):
-    """Analyze documents for specific German authority compliance"""
-    
-    # Process files (reuse existing file processing logic)
-    documents = []
-    for file in files:
-        # Validate file type
-        if not any(file.filename.lower().endswith(ext) for ext in settings.allowed_extensions):
-            raise HTTPException(
-                status_code=400,
-                detail=f"File type not supported: {file.filename}. "
-                       f"Allowed: {', '.join(settings.allowed_extensions)}"
-            )
-        
-        # Read and decode content
-        content = await file.read()
-        
-        # Create document object for analysis
-        doc = type('Document', (), {
-            'filename': file.filename,
-            'content': content.decode('utf-8', errors='ignore'),
-            'file_size': len(content)
-        })()
-        documents.append(doc)
-    
-    # Analyze with German Authority Engine
-    try:
-        engine = GermanAuthorityEngine()
-        analysis = await engine.analyze_for_authority(documents, authority_id, industry)
-        
-        return {
-            "authority": analysis.authority_name,
-            "jurisdiction": analysis.jurisdiction,
-            "compliance_score": analysis.compliance_score,
-            "requirements_met": analysis.requirements_met,
-            "requirements_missing": analysis.requirements_missing,
-            "priority_actions": analysis.priority_actions,
-            "audit_readiness": analysis.audit_readiness,
-            "penalty_risk": analysis.penalty_risk,
-            "industry_focus": industry,
-            "analysis_timestamp": datetime.now(timezone.utc).isoformat()
-        }
-        
-    except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid authority ID: {authority_id}. {str(e)}"
-        )
-    except Exception as e:
-        logger.error(
-            "German authority analysis failed",
-            authority_id=authority_id,
-            industry=industry,
-            error=str(e)
-        )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Authority-specific analysis failed: {str(e)}"
-        )
 
 # Helper functions
 def _create_error_analysis(result) -> DocumentAnalysis:
@@ -422,7 +521,8 @@ async def enhanced_health_check():
             "ui_context_intelligence": True,
             "performance_monitoring": True,
             "websocket_progress": True,
-            "german_authority_analysis": True
+            "german_authority_analysis": True,
+            "big4_authority_engine": True
         }
     }
 
@@ -441,7 +541,8 @@ async def get_supported_frameworks():
                     "parallel_processing": True,
                     "ui_context_detection": True,
                     "german_priority": True,
-                    "authority_specific_analysis": True
+                    "authority_specific_analysis": True,
+                    "big4_authority_engine": True
                 }
             },
             {
@@ -454,7 +555,8 @@ async def get_supported_frameworks():
                     "parallel_processing": True,
                     "ui_context_detection": True,
                     "german_priority": False,
-                    "authority_specific_analysis": False
+                    "authority_specific_analysis": False,
+                    "big4_authority_engine": False
                 }
             },
             {
@@ -467,7 +569,8 @@ async def get_supported_frameworks():
                     "parallel_processing": True,
                     "ui_context_detection": True,
                     "german_priority": False,
-                    "authority_specific_analysis": False
+                    "authority_specific_analysis": False,
+                    "big4_authority_engine": False
                 }
             },
             {
@@ -480,7 +583,8 @@ async def get_supported_frameworks():
                     "parallel_processing": True,
                     "ui_context_detection": True,
                     "german_priority": False,
-                    "authority_specific_analysis": False
+                    "authority_specific_analysis": False,
+                    "big4_authority_engine": False
                 }
             }
         ]
