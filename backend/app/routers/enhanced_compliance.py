@@ -138,7 +138,7 @@ async def analyze_compliance_with_authority_intelligence(
         authority_guidance = []
         authority_confidence = 0.0
         
-        if german_content_detected and compliance_framework == ComplianceFramework.GDPR:
+        if german_content_detected and str(compliance_framework).lower() == 'gdpr':
             try:
                 logger.info("German content detected - activating Big 4 Authority Engine")
                 
