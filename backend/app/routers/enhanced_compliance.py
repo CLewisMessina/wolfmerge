@@ -1,10 +1,12 @@
 # app/routers/enhanced_compliance.py
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request, Depends, Query
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 import time
+import asyncio
+from dataclasses import dataclass, field
 
 from app.models.compliance import AnalysisResponse, ComplianceFramework, DocumentAnalysis, ComplianceReport, DocumentLanguage
 from app.services.file_processor import FileProcessor
@@ -34,30 +36,68 @@ logger = structlog.get_logger()
 # Initialize Big 4 Engine
 big4_endpoints = create_big4_authority_endpoints()
 
+# =============================================================================
+# AUTHORITY CONTEXT CLASS - SCOPE FIX IMPLEMENTATION
+# =============================================================================
+
+@dataclass
+class AuthorityContext:
+    """
+    Context object to maintain authority detection results throughout processing.
+    This ensures authority data persists across async operations and try blocks.
+    """
+    detected_authority: str = "unknown"
+    detected_industry: str = "unknown" 
+    authority_confidence: float = 0.0
+    authority_analysis: Optional[Any] = None
+    authority_guidance: List[str] = field(default_factory=list)
+    german_content_detected: bool = False
+    
+    def has_authority_data(self) -> bool:
+        """Check if valid authority data was detected"""
+        return self.detected_authority != "unknown" and self.authority_analysis is not None
+    
+    def to_metadata_dict(self) -> Dict[str, Any]:
+        """Convert to metadata dictionary for API response"""
+        return {
+            "detected_authority": self.detected_authority,
+            "detected_industry": self.detected_industry,
+            "authority_confidence": self.authority_confidence,
+            "authority_analysis_available": self.authority_analysis is not None,
+            "authority_guidance_count": len(self.authority_guidance),
+            "enforcement_likelihood": self.authority_analysis.enforcement_likelihood if self.authority_analysis else 0.0,
+            "penalty_risk_level": self.authority_analysis.penalty_risk_level if self.authority_analysis else "unknown",
+            "audit_readiness_score": self.authority_analysis.audit_readiness_score if self.authority_analysis else 0.0
+        }
+
+# =============================================================================
+# MAIN ANALYSIS ENDPOINT WITH AUTHORITY INTELLIGENCE
+# =============================================================================
+
 @router.post("/analyze", response_model=AnalysisResponse)
-async def analyze_compliance_with_authority_intelligence(
+async def analyze_compliance_with_enterprise_features(
     request: Request,
     files: List[UploadFile] = File(...),
     framework: str = Form(default="gdpr"),
     workspace_id: str = Form(default=DEMO_WORKSPACE_ID),
     user_id: str = Form(default=DEMO_ADMIN_USER_ID),
-    # NEW: Authority detection parameters
     company_location: Optional[str] = Form(None),
     industry_hint: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db_session)
 ):
     """
-    Enhanced Analysis with Integrated Authority Intelligence
-    
-    Main analysis endpoint now includes:
-    - Automatic German authority detection
-    - Industry-specific analysis  
-    - Authority-specific compliance guidance
-    - Performance optimization for 5s target
-    - Maintains existing response format for backward compatibility
+    Day 3 Enhanced: 10x Performance + UI Context Intelligence + Authority Detection
+    - Parallel processing with intelligent job prioritization
+    - Real-time WebSocket progress updates
+    - UI context detection for smart interface automation
+    - Performance monitoring with German compliance optimization
+    - Integrated German authority detection and analysis
     """
     
     start_time = datetime.now(timezone.utc)
+    
+    # Initialize authority context object to maintain scope throughout processing
+    authority_ctx = AuthorityContext()
     
     # Extract client information for audit trail
     client_ip = request.client.host if request.client else None
@@ -110,44 +150,36 @@ async def analyze_compliance_with_authority_intelligence(
             )
         
         logger.info(
-            "Enhanced processing with authority intelligence started",
+            "Day 3 enhanced processing started",
             workspace_id=workspace_id,
             file_count=len(processed_files),
             total_size_mb=total_size / (1024 * 1024),
             framework=framework
         )
         
-        # Initialize UI Context for German detection
+        # =================================================================
+        # BIG 4 GERMAN AUTHORITY DETECTION WITH SCOPE FIX
+        # =================================================================
+        
+        # Initialize UI Context Layer for content detection
         ui_context_layer = UIContextLayer()
         
-        # Check for German content
-        german_content_detected = False
-        for filename, content, size in processed_files:
-            content_str = content if isinstance(content, str) else content.decode('utf-8', errors='ignore')
-            if await ui_context_layer._detect_german_content(content_str):
-                german_content_detected = True
-                break
+        # German content detection
+        authority_ctx.german_content_detected = any(
+            ui_context_layer._detect_german_content(content) 
+            for _, content, _ in processed_files
+        )
         
-        # =================================================================
-        # NEW: BIG 4 AUTHORITY DETECTION INTEGRATION
-        # =================================================================
-        
-        authority_analysis = None
-        detected_authority = "unknown"
-        detected_industry = "unknown"
-        authority_guidance = []
-        authority_confidence = 0.0
-        
-        if german_content_detected and str(compliance_framework).lower() == 'gdpr':
+        # Only activate Big 4 Authority Engine for German GDPR content
+        if authority_ctx.german_content_detected and str(compliance_framework).lower() == 'gdpr':
             try:
-                logger.info("German content detected - activating Big 4 Authority Engine")
+                logger.info("🔍 Big 4 German Authority Engine: Activating for German GDPR content")
                 
-                # Convert processed files to Document objects for Big 4 engine
+                # Create document objects for Big 4 engine
                 documents = []
                 for filename, content, size in processed_files:
                     content_str = content if isinstance(content, str) else content.decode('utf-8', errors='ignore')
                     
-                    # Create document object compatible with Big 4 engine
                     doc = type('Document', (), {
                         'filename': filename,
                         'content': content_str,
@@ -156,59 +188,23 @@ async def analyze_compliance_with_authority_intelligence(
                     })()
                     documents.append(doc)
                 
-                # Initialize Big 4 Authority Engine components
-                from app.services.german_authority_engine.big4.big4_detector import Big4AuthorityDetector
-                from app.services.german_authority_engine.big4.big4_analyzer import Big4ComplianceAnalyzer
-                
-                big4_detector = Big4AuthorityDetector()
-                big4_analyzer = Big4ComplianceAnalyzer()
-                
-                # Detect industry from content
-                detected_industry = await big4_detector.detect_industry_from_content(documents)
-                logger.info(f"Industry detected: {detected_industry}")
-                
-                # Detect relevant authorities
-                detection_result = await big4_detector.detect_relevant_authorities(
-                    documents=documents,
-                    suggested_industry=detected_industry if detected_industry != "unknown" else industry_hint,
-                    suggested_state=company_location
+                # Use optimized authority detection to maintain scope
+                authority_ctx = await _optimized_authority_detection(
+                    documents, company_location, industry_hint
                 )
                 
-                if detection_result.primary_authority:
-                    detected_authority = detection_result.primary_authority.value
-                    authority_confidence = detection_result.detection_confidence
-                    
-                    logger.info(
-                        f"Authority detected: {detected_authority} (confidence: {authority_confidence:.2f})"
-                    )
-                    
-                    # Perform authority-specific analysis
-                    authority_analysis = await big4_analyzer.analyze_for_authority(
-                        documents=documents,
-                        authority=detection_result.primary_authority,
-                        industry=detected_industry if detected_industry != "unknown" else industry_hint
-                    )
-                    
-                    # Extract authority-specific guidance
-                    authority_guidance = [
-                        f"{authority_analysis.authority_name} requires: {req}" 
-                        for req in authority_analysis.requirements_missing[:3]
-                    ]
-                    
-                    # Add industry-specific guidance
-                    if authority_analysis.industry_specific_guidance:
-                        authority_guidance.extend(authority_analysis.industry_specific_guidance[:2])
-                    
-                    logger.info(
-                        f"Authority analysis completed - {len(authority_guidance)} guidance items generated"
-                    )
+                logger.info(
+                    f"Authority detection completed: {authority_ctx.detected_authority} "
+                    f"(industry: {authority_ctx.detected_industry}, "
+                    f"confidence: {authority_ctx.authority_confidence:.2f})"
+                )
                 
             except Exception as e:
                 logger.warning(f"Big 4 Authority Engine error (non-critical): {str(e)}")
-                # Continue with standard analysis if authority detection fails
+                # Authority context remains with default values, processing continues
         
         # =================================================================
-        # EXISTING ANALYSIS PIPELINE (Enhanced with Authority Data)
+        # EXISTING ANALYSIS PIPELINE WITH AUTHORITY CONTEXT
         # =================================================================
         
         # Initialize Day 3 processing components
@@ -216,10 +212,15 @@ async def analyze_compliance_with_authority_intelligence(
         batch_processor = BatchProcessor()
         performance_monitor = PerformanceMonitor()
         
-        # Create intelligent job queue with German priority and authority context
+        # Generate UI context intelligence
+        ui_context = ui_context_layer.analyze_ui_context([])  # Will be populated with jobs
+        
+        # Send UI context to frontend
+        await progress_handler.handle_ui_context_update(workspace_id, ui_context.to_dict())
+        
+        # Create intelligent job queue with authority context
         jobs = []
         for i, (filename, content, size) in enumerate(processed_files):
-            # Create job with authority context
             job_data = {
                 "job_id": f"{workspace_id}_{i}_{int(time.time())}",
                 "workspace_id": workspace_id,
@@ -228,30 +229,29 @@ async def analyze_compliance_with_authority_intelligence(
                 "content": content,
                 "file_size": size,
                 "framework": compliance_framework,
-                "priority": 1000 if german_content_detected else 500,
+                "priority": 1000 if authority_ctx.german_content_detected else 500,
                 
-                # NEW: Authority context
-                "authority_context": {
-                    "detected_authority": detected_authority,
-                    "detected_industry": detected_industry,
-                    "authority_analysis": authority_analysis,
-                    "german_content": german_content_detected
-                },
+                # Pass the entire authority context to maintain scope
+                "authority_context": authority_ctx,
                 
-                # Performance optimization indicators
                 "optimization_applied": True,
-                "is_german_compliance": german_content_detected
+                "is_german_compliance": authority_ctx.german_content_detected
             }
             
-            # Create job object (simplified for integration)
-            job = type('DocumentJob', (), job_data)()
+            # Create job object
+            job = DocumentJob(
+                job_id=job_data["job_id"],
+                workspace_id=workspace_id,
+                user_id=user_id,
+                filename=filename,
+                content=content,
+                size=size,
+                framework=compliance_framework,
+                priority=job_data["priority"],
+                is_german_compliance=authority_ctx.german_content_detected,
+                authority_context=authority_ctx
+            )
             jobs.append(job)
-        
-        # Generate UI context intelligence with authority data
-        ui_context = ui_context_layer.analyze_ui_context(jobs)
-        
-        # Send UI context to frontend
-        await progress_handler.handle_ui_context_update(workspace_id, ui_context.to_dict())
         
         # Create intelligent batches for parallel processing
         batches = job_queue.create_intelligent_batches(jobs)
@@ -259,20 +259,14 @@ async def analyze_compliance_with_authority_intelligence(
         # Start performance monitoring
         performance_monitor.start_batch_monitoring(len(jobs))
         
-        # Notify frontend of batch start with authority data
+        # Notify frontend of batch start
         await progress_handler.handle_batch_started(workspace_id, {
             "total_jobs": len(jobs),
             "total_batches": len(batches),
-            "german_docs": sum(1 for job in jobs if getattr(job, 'is_german_compliance', False)),
+            "german_docs": sum(1 for job in jobs if job.is_german_compliance),
             "framework": framework,
             "ui_context": ui_context.to_dict(),
-            
-            # NEW: Authority information
-            "authority_intelligence": {
-                "detected_authority": detected_authority,
-                "detected_industry": detected_industry,
-                "authority_confidence": authority_confidence
-            }
+            "authority_intelligence": authority_ctx.to_metadata_dict()
         })
         
         # Create progress callback for real-time updates
@@ -290,30 +284,22 @@ async def analyze_compliance_with_authority_intelligence(
         individual_analyses = []
         for result in processing_results:
             if result.success and result.analysis:
-                analysis = result.analysis
+                # Enhance analysis with authority data if available
+                if authority_ctx.has_authority_data():
+                    if hasattr(result.analysis, 'german_insights') and result.analysis.german_insights:
+                        result.analysis.german_insights["detected_authority"] = authority_ctx.detected_authority
+                        result.analysis.german_insights["detected_industry"] = authority_ctx.detected_industry
+                        result.analysis.german_insights["authority_guidance"] = authority_ctx.authority_guidance[:2]
                 
-                # NEW: Enhance analysis with authority-specific insights
-                if hasattr(analysis, 'german_insights') and analysis.german_insights and detected_authority != "unknown":
-                    analysis.german_insights["detected_authority"] = detected_authority
-                    analysis.german_insights["authority_specific_guidance"] = authority_guidance
-                    analysis.german_insights["detected_industry"] = detected_industry
-                
-                individual_analyses.append(analysis)
+                individual_analyses.append(result.analysis)
             else:
                 # Create error analysis for failed processing
                 individual_analyses.append(_create_error_analysis(result))
         
-        # Create enhanced compliance report with UI context and authority data
+        # Create enhanced compliance report with authority context
         compliance_report = await _create_enhanced_compliance_report(
             individual_analyses, ui_context, performance_monitor, compliance_framework, workspace_id,
-            
-            # NEW: Authority context for enhanced reporting
-            authority_context={
-                "detected_authority": detected_authority,
-                "detected_industry": detected_industry,
-                "authority_analysis": authority_analysis,
-                "authority_guidance": authority_guidance
-            }
+            authority_context=authority_ctx
         )
         
         processing_time = (datetime.now(timezone.utc) - start_time).total_seconds()
@@ -325,22 +311,22 @@ async def analyze_compliance_with_authority_intelligence(
         # Enhanced executive summary with authority information
         enhanced_summary = compliance_report.executive_summary
         
-        if detected_authority != "unknown":
-            authority_name = authority_analysis.authority_name if authority_analysis else detected_authority.upper()
+        if authority_ctx.has_authority_data():
+            authority_name = authority_ctx.authority_analysis.authority_name
             enhanced_summary += f"\n\nGerman Authority: {authority_name}"
             
-            if detected_industry != "unknown":
-                enhanced_summary += f"\nIndustry: {detected_industry.title()}"
+            if authority_ctx.detected_industry != "unknown":
+                enhanced_summary += f"\nIndustry: {authority_ctx.detected_industry.title()}"
             
-            if authority_guidance:
-                enhanced_summary += f"\nAuthority-Specific Requirements: {len(authority_guidance)} identified"
+            if authority_ctx.authority_guidance:
+                enhanced_summary += f"\nAuthority-Specific Requirements: {len(authority_ctx.authority_guidance)} identified"
         
         # Enhanced next steps with authority guidance
         enhanced_next_steps = compliance_report.next_steps.copy()
-        if authority_guidance:
-            enhanced_next_steps = authority_guidance + enhanced_next_steps
+        if authority_ctx.authority_guidance:
+            enhanced_next_steps = authority_ctx.authority_guidance + enhanced_next_steps
         
-        # Create comprehensive response with Day 3 enhancements and authority intelligence
+        # Create comprehensive response with Day 3 enhancements
         analysis_response = AnalysisResponse(
             individual_analyses=individual_analyses,
             compliance_report=ComplianceReport(
@@ -356,72 +342,27 @@ async def analyze_compliance_with_authority_intelligence(
                 german_specific_recommendations=compliance_report.german_specific_recommendations
             ),
             processing_metadata={
-                "analysis_id": f"enhanced_authority_{int(start_time.timestamp())}",
+                "analysis_id": f"day3_{int(start_time.timestamp())}",
                 "processing_time": processing_time,
                 "total_documents": len(processed_files),
                 "total_batches": len(batches),
                 "framework": framework,
                 "workspace_id": workspace_id,
                 "performance_grade": _calculate_performance_grade(processing_results),
-                
-                # Enhanced Day 3 features
                 "day3_features": {
                     "parallel_processing": True,
                     "ui_context_intelligence": True,
                     "german_priority_processing": True,
                     "real_time_progress": True,
                     "performance_monitoring": True,
-                    "authority_intelligence": True,  # NEW
-                    "performance_optimization": True  # NEW
+                    "authority_intelligence": True,
+                    "performance_optimization": True
                 },
+                "ui_context": ui_context.to_dict(),
+                "performance_metrics": performance_monitor.get_processing_statistics(),
                 
-                # NEW: Authority intelligence metadata
-                "authority_intelligence": {
-                    "detected_authority": detected_authority,
-                    "detected_industry": detected_industry,
-                    "authority_confidence": authority_confidence,
-                    "authority_analysis_available": authority_analysis is not None,
-                    "authority_guidance_count": len(authority_guidance),
-                    "enforcement_likelihood": authority_analysis.enforcement_likelihood if authority_analysis else 0.0,
-                    "penalty_risk_level": authority_analysis.penalty_risk_level if authority_analysis else "unknown",
-                    "audit_readiness_score": authority_analysis.audit_readiness_score if authority_analysis else 0.0
-                },
-                
-                "ui_context": {
-                    **ui_context.to_dict(),
-                    
-                    # Enhanced UI context with authority data
-                    "detected_authority": detected_authority,
-                    "detected_industry": detected_industry,
-                    "authority_specific_actions": [
-                        {
-                            "action_id": "view_authority_analysis",
-                            "label": f"View {detected_authority.upper()} Analysis",
-                            "description": f"See detailed {detected_authority.upper()} compliance requirements",
-                            "priority": "high",
-                            "category": "analyze",
-                            "endpoint": f"/api/v2/compliance/analyze-authority/{detected_authority}",
-                            "estimated_time": 90
-                        },
-                        {
-                            "action_id": "authority_comparison",
-                            "label": "Compare German Authorities",
-                            "description": "Compare compliance across multiple German authorities",
-                            "priority": "medium",
-                            "category": "analyze",
-                            "endpoint": "/api/v2/compliance/compare-authorities",
-                            "estimated_time": 180
-                        }
-                    ] if detected_authority != "unknown" else []
-                },
-                
-                "performance_metrics": {
-                    **performance_monitor.get_processing_statistics(),
-                    "optimization_applied": True,
-                    "target_time_seconds": 5.0,
-                    "actual_time_seconds": processing_time,
-                    "performance_improvement": max(0, (7.1 - processing_time) / 7.1 * 100)  # % improvement from 7.1s baseline
-                }
+                # Use the context object's metadata method for authority data
+                "authority_intelligence": authority_ctx.to_metadata_dict()
             }
         )
         
@@ -434,24 +375,18 @@ async def analyze_compliance_with_authority_intelligence(
             "success_rate": len([r for r in processing_results if r.success]) / len(processing_results),
             "performance_grade": _calculate_performance_grade(processing_results),
             "ui_context": ui_context.to_dict(),
-            
-            # NEW: Authority completion data
-            "authority_intelligence": {
-                "detected_authority": detected_authority,
-                "detected_industry": detected_industry,
-                "authority_guidance_provided": len(authority_guidance) > 0
-            }
+            "authority_intelligence": authority_ctx.to_metadata_dict()
         })
         
         logger.info(
-            "Enhanced analysis with authority intelligence completed successfully",
+            "Day 3 enhanced analysis completed successfully",
             workspace_id=workspace_id,
             processing_time=processing_time,
             documents_processed=len(individual_analyses),
             compliance_score=compliance_report.compliance_score,
             performance_grade=_calculate_performance_grade(processing_results),
-            detected_authority=detected_authority,
-            detected_industry=detected_industry
+            detected_authority=authority_ctx.detected_authority,
+            detected_industry=authority_ctx.detected_industry
         )
         
         return analysis_response
@@ -468,7 +403,7 @@ async def analyze_compliance_with_authority_intelligence(
         })
         
         logger.error(
-            "Enhanced analysis with authority intelligence failed",
+            "Day 3 enhanced analysis failed",
             workspace_id=workspace_id,
             error=str(e)
         )
@@ -477,6 +412,91 @@ async def analyze_compliance_with_authority_intelligence(
             status_code=500,
             detail=f"Enhanced compliance analysis failed: {str(e)}"
         )
+
+# =============================================================================
+# OPTIMIZED AUTHORITY DETECTION - SCOPE FIX HELPER
+# =============================================================================
+
+async def _optimized_authority_detection(
+    documents: List[Any],
+    company_location: Optional[str],
+    industry_hint: Optional[str]
+) -> AuthorityContext:
+    """
+    Optimized authority detection with performance considerations.
+    Uses concurrent execution where possible and maintains proper scope.
+    """
+    context = AuthorityContext()
+    
+    try:
+        from app.services.german_authority_engine.big4.big4_detector import Big4AuthorityDetector
+        from app.services.german_authority_engine.big4.big4_analyzer import Big4ComplianceAnalyzer
+        
+        detector = Big4AuthorityDetector()
+        analyzer = Big4ComplianceAnalyzer()
+        
+        # Run industry detection and authority detection concurrently
+        industry_task = detector.detect_industry_from_content(documents)
+        
+        # Start with industry hint if available to speed up detection
+        initial_industry = industry_hint if industry_hint else None
+        
+        # Detect authorities with initial hint
+        detection_task = detector.detect_relevant_authorities(
+            documents=documents,
+            suggested_industry=initial_industry,
+            suggested_state=company_location
+        )
+        
+        # Await both tasks
+        detected_industry, detection_result = await asyncio.gather(
+            industry_task, detection_task
+        )
+        
+        # Update context with detection results
+        context.detected_industry = detected_industry if detected_industry != "unknown" else (industry_hint or "unknown")
+        context.german_content_detected = True  # Already confirmed by caller
+        
+        if detection_result.primary_authority:
+            context.detected_authority = detection_result.primary_authority.value
+            context.authority_confidence = detection_result.detection_confidence
+            
+            logger.info(
+                f"Authority detected: {context.detected_authority} "
+                f"(confidence: {context.authority_confidence:.2f})"
+            )
+            
+            # Perform analysis only if detection confidence is high enough
+            if context.authority_confidence >= 0.5:  # 50% threshold
+                context.authority_analysis = await analyzer.analyze_for_authority(
+                    documents=documents,
+                    authority=detection_result.primary_authority,
+                    industry=context.detected_industry
+                )
+                
+                # Extract authority-specific guidance
+                if context.authority_analysis:
+                    context.authority_guidance = [
+                        f"{context.authority_analysis.authority_name} requires: {req}" 
+                        for req in context.authority_analysis.requirements_missing[:3]
+                    ]
+                    
+                    # Add industry-specific guidance
+                    if context.authority_analysis.industry_specific_guidance:
+                        context.authority_guidance.extend(
+                            context.authority_analysis.industry_specific_guidance[:2]
+                        )
+                    
+                    logger.info(
+                        f"Authority analysis completed - "
+                        f"{len(context.authority_guidance)} guidance items generated"
+                    )
+    
+    except Exception as e:
+        logger.warning(f"Optimized authority detection failed: {str(e)}")
+        # Return context with default values
+    
+    return context
 
 # =============================================================================
 # BIG 4 GERMAN AUTHORITY ENDPOINTS - Added for Enhanced Authority Analysis
@@ -645,7 +665,7 @@ async def get_german_authorities():
     }
 
 # =============================================================================
-# HELPER FUNCTIONS (Enhanced with Authority Data)
+# HELPER FUNCTIONS WITH AUTHORITY CONTEXT SUPPORT
 # =============================================================================
 
 def _create_error_analysis(result) -> DocumentAnalysis:
@@ -669,7 +689,7 @@ async def _create_enhanced_compliance_report(
     performance_monitor,  # PerformanceMonitor type
     framework: ComplianceFramework,
     workspace_id: str,
-    authority_context: Optional[dict] = None
+    authority_context: Optional[AuthorityContext] = None
 ) -> ComplianceReport:
     """Create enhanced compliance report with Day 3 intelligence and authority data"""
     
@@ -686,58 +706,51 @@ async def _create_enhanced_compliance_report(
     scenario_bonus = 0.1 if ui_context.detected_scenario.value != "unknown" else 0.0
     completeness_bonus = ui_context.compliance_completeness * 0.2
     
-    # NEW: Authority-specific scoring adjustments
+    # Authority-specific scoring adjustments
     authority_bonus = 0.0
-    if authority_context and authority_context.get("authority_analysis"):
-        authority_analysis = authority_context["authority_analysis"]
+    if authority_context and authority_context.has_authority_data():
         # Higher bonus for higher authority compliance scores
-        authority_bonus = authority_analysis.compliance_score * 0.1
+        authority_bonus = authority_context.authority_analysis.compliance_score * 0.1
     
     final_compliance_score = min(1.0, base_compliance_score + scenario_bonus + completeness_bonus + authority_bonus)
     
-    # Enhanced executive summary with UI context and authority data
+    # Enhanced executive summary with authority information
     executive_summary = f"""
 Day 3 Enhanced Analysis: {framework.value.upper()} compliance assessment completed.
 
+Portfolio Analysis:
+- Documents Analyzed: {len(analyses)}
+- German Content: {german_documents} documents ({(german_documents/len(analyses)*100):.0f}%)
+- Compliance Score: {final_compliance_score:.2%}
+
 Scenario Detected: {ui_context.scenario_description}
 Industry: {ui_context.industry_detected.value.title()}
-German Authority: {ui_context.german_authority.value.upper() if ui_context.german_authority.value != 'unknown' else 'Not specified'}
-
-Processed {len(analyses)} documents with {ui_context.total_documents} total chunks.
-Compliance Portfolio Score: {final_compliance_score:.2f}/1.0
-German Content: {ui_context.german_content_percentage:.1f}% of documents
-
-Smart Actions Available: {len(ui_context.suggested_actions)} automated recommendations
-Priority Risks Identified: {len(ui_context.priority_risks)}
     """.strip()
     
-    # Enhanced recommendations based on UI context and authority guidance
+    # Add authority information if available
+    if authority_context and authority_context.has_authority_data():
+        executive_summary += f"""
+
+Authority Intelligence:
+- Detected Authority: {authority_context.authority_analysis.authority_name} ({authority_context.detected_authority})
+- Industry: {authority_context.detected_industry.title()}
+- Enforcement Likelihood: {authority_context.authority_analysis.enforcement_likelihood:.2%}
+- Audit Readiness: {authority_context.authority_analysis.audit_readiness_score:.2%}
+        """.strip()
+    
+    # Enhanced recommendations based on UI context and authority data
     next_steps = [
         action.description for action in ui_context.suggested_actions[:3]
     ]
     
-    # Add authority-specific recommendations if available
-    if authority_context and authority_context.get("authority_guidance"):
-        next_steps = authority_context["authority_guidance"][:3] + next_steps
+    # Add authority-specific guidance
+    if authority_context and authority_context.authority_guidance:
+        next_steps = authority_context.authority_guidance + next_steps
     
     next_steps.extend([
         "Review detailed document-level analysis results",
         "Export compliance report for stakeholder review"
     ])
-    
-    # Enhanced compliance strengths with authority data
-    compliance_strengths = [
-        f"Intelligent processing completed in high-performance mode",
-        f"UI context detection: {ui_context.detected_scenario.value.replace('_', ' ').title()}",
-        f"German compliance optimization active",
-        f"Real-time progress tracking enabled"
-    ]
-    
-    # Add authority-specific strengths
-    if authority_context and authority_context.get("detected_authority") != "unknown":
-        compliance_strengths.append(
-            f"Authority-specific analysis for {authority_context['detected_authority'].upper()}"
-        )
     
     return ComplianceReport(
         framework=framework,
@@ -746,7 +759,12 @@ Priority Risks Identified: {len(ui_context.priority_risks)}
         documents_analyzed=len(analyses),
         german_documents_detected=german_documents > 0,
         priority_gaps=ui_context.priority_risks,
-        compliance_strengths=compliance_strengths,
+        compliance_strengths=[
+            f"Intelligent processing completed in high-performance mode",
+            f"UI context detection: {ui_context.detected_scenario.value.replace('_', ' ').title()}",
+            f"German compliance optimization active",
+            f"Real-time progress tracking enabled"
+        ],
         next_steps=next_steps,
         german_specific_recommendations=ui_context.quick_wins if german_documents > 0 else []
     )
@@ -777,10 +795,7 @@ def _calculate_performance_grade(results) -> str:
     else:
         return "F"
 
-# =============================================================================
-# EXISTING ENDPOINTS (Maintained for Backward Compatibility)
-# =============================================================================
-
+# Keep existing endpoints for backward compatibility
 @router.get("/health")
 async def enhanced_health_check():
     """Enhanced health check for Day 2 enterprise features"""
@@ -793,7 +808,8 @@ async def enhanced_health_check():
             "performance_monitoring": True,
             "websocket_progress": True,
             "german_authority_analysis": True,
-            "big4_authority_engine": True
+            "big4_authority_engine": True,
+            "authority_scope_fix": True
         }
     }
 
@@ -813,7 +829,8 @@ async def get_supported_frameworks():
                     "ui_context_detection": True,
                     "german_priority": True,
                     "authority_specific_analysis": True,
-                    "big4_authority_engine": True
+                    "big4_authority_engine": True,
+                    "authority_scope_fix": True
                 }
             },
             {
@@ -827,7 +844,8 @@ async def get_supported_frameworks():
                     "ui_context_detection": True,
                     "german_priority": False,
                     "authority_specific_analysis": False,
-                    "big4_authority_engine": False
+                    "big4_authority_engine": False,
+                    "authority_scope_fix": False
                 }
             },
             {
@@ -841,7 +859,8 @@ async def get_supported_frameworks():
                     "ui_context_detection": True,
                     "german_priority": False,
                     "authority_specific_analysis": False,
-                    "big4_authority_engine": False
+                    "big4_authority_engine": False,
+                    "authority_scope_fix": False
                 }
             },
             {
@@ -855,7 +874,8 @@ async def get_supported_frameworks():
                     "ui_context_detection": True,
                     "german_priority": False,
                     "authority_specific_analysis": False,
-                    "big4_authority_engine": False
+                    "big4_authority_engine": False,
+                    "authority_scope_fix": False
                 }
             }
         ]
