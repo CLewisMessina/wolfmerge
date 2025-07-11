@@ -234,7 +234,7 @@ class UIContextLayer:
         }
     
     # NEW METHOD: German content detection for authority activation
-    async def _detect_german_content(self, content: str) -> bool:
+    def _detect_german_content(self, content: str) -> bool:
         """Quick German content detection for authority activation"""
         
         german_indicators = [
