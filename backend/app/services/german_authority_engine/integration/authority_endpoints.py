@@ -1,527 +1,182 @@
-# backend/app/services/german_authority_engine/integration/authority_endpoints.py
-"""
-Big 4 Authority API Integration Endpoints
-
-This module provides the integration layer between enhanced_compliance.py
-and the Big 4 German Authority Engine. It adds new endpoints for:
-
-- Smart authority detection and analysis
-- Multi-authority comparison
-- Industry-specific compliance analysis
-- Authority-specific recommendations
-
-These endpoints extend enhanced_compliance.py without modifying existing functionality.
-"""
-
-from fastapi import HTTPException, UploadFile, File, Form, Query, Depends
+# app/services/german_authority_engine/integration/authority_endpoints.py - Fixed Version
+from fastapi import UploadFile, HTTPException, Depends
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
-from app.models.database import Document
+from app.config import settings  # FIXED: Ensure settings import works
 from app.database import get_db_session
-from app.config import settings
-
-# Big 4 Authority Engine imports
-from ..big4.big4_profiles import Big4Authority, get_big4_authority_profile, get_all_big4_authorities
-from ..big4.big4_detector import Big4AuthorityDetector
-from ..big4.big4_analyzer import Big4ComplianceAnalyzer
-from ..big4.big4_templates import Big4IndustryTemplateEngine, IndustryTemplate
-from .multi_authority_analyzer import MultiAuthorityAnalyzer
-from .response_formatter import Big4ResponseFormatter
 
 logger = structlog.get_logger()
 
 class Big4AuthorityEndpoints:
     """
-    Big 4 Authority API endpoints for integration with enhanced_compliance.py
+    Big 4 German Authority Endpoints for Enhanced Compliance Analysis
     
-    This class provides methods that can be added as FastAPI endpoints
-    to extend the existing compliance analysis functionality.
+    Provides API endpoints for:
+    - Smart authority detection based on business context
+    - Authority-specific compliance analysis
+    - Multi-authority comparison
+    - Industry-specific templates
     """
     
     def __init__(self):
-        self.detector = Big4AuthorityDetector()
-        self.analyzer = Big4ComplianceAnalyzer()
-        self.template_engine = Big4IndustryTemplateEngine()
-        self.multi_analyzer = MultiAuthorityAnalyzer()
-        self.formatter = Big4ResponseFormatter()
+        """Initialize Big 4 Authority Endpoints"""
+        logger.info("Initializing Big 4 Authority Endpoints")
         
-        logger.info("Big 4 Authority Endpoints initialized")
-    
-    async def analyze_with_smart_detection(
-        self,
-        files: List[UploadFile],
-        industry: Optional[str] = None,
-        company_location: Optional[str] = None,
-        company_size: Optional[str] = None,
-        workspace_id: str = "demo",
-        db: AsyncSession = None
-    ) -> Dict[str, Any]:
-        """
-        Smart authority detection and analysis endpoint
-        
-        Automatically detects relevant Big 4 authorities and provides
-        comprehensive analysis with multi-authority comparison.
-        
-        Usage in enhanced_compliance.py:
-        @router.post("/analyze-with-authority-detection")
-        async def analyze_with_authority_detection(...):
-            endpoints = Big4AuthorityEndpoints()
-            return await endpoints.analyze_with_smart_detection(...)
-        """
-        
-        start_time = datetime.now(timezone.utc)
-        
-        logger.info(
-            "Starting smart authority detection analysis",
-            files=len(files),
-            industry=industry,
-            location=company_location,
-            company_size=company_size
-        )
-        
+        # Import detector and analyzer here to avoid circular imports
         try:
-            # Validate and process files
-            documents = await self._process_uploaded_files(files)
-            
-            # Perform smart detection and analysis
-            analysis_result = await self.analyzer.analyze_with_smart_detection(
-                documents=documents,
-                industry=industry,
-                company_location=company_location,
-                company_size=company_size
-            )
-            
-            # Get industry template guidance if industry provided
-            template_guidance = None
-            if industry:
-                try:
-                    industry_enum = IndustryTemplate(industry.lower())
-                    template_guidance = self.template_engine.get_industry_requirements_checklist(
-                        industry_enum, analysis_result.primary_analysis.authority_id
-                    )
-                except ValueError:
-                    logger.warning(f"Unknown industry for template: {industry}")
-            
-            # Format comprehensive response
-            response = await self.formatter.format_smart_detection_response(
-                analysis_result=analysis_result,
-                template_guidance=template_guidance,
-                processing_time=(datetime.now(timezone.utc) - start_time).total_seconds(),
-                workspace_id=workspace_id
-            )
-            
-            logger.info(
-                "Smart authority detection completed",
-                primary_authority=analysis_result.primary_analysis.authority_id,
-                processing_time=response["processing_metadata"]["processing_time_seconds"]
-            )
-            
-            return response
-            
-        except Exception as e:
-            logger.error(
-                "Smart authority detection failed",
-                error=str(e),
-                industry=industry,
-                location=company_location
-            )
-            raise HTTPException(
-                status_code=500,
-                detail=f"Smart authority detection failed: {str(e)}"
-            )
-    
-    async def analyze_for_specific_authority(
-        self,
-        authority_id: str,
-        files: List[UploadFile],
-        industry: Optional[str] = None,
-        company_size: Optional[str] = None,
-        workspace_id: str = "demo",
-        db: AsyncSession = None
-    ) -> Dict[str, Any]:
-        """
-        Authority-specific analysis endpoint
-        
-        Provides detailed analysis for a specific Big 4 authority
-        with industry-specific guidance and recommendations.
-        
-        Usage in enhanced_compliance.py:
-        @router.post("/analyze-authority/{authority_id}")
-        async def analyze_authority_specific(...):
-            endpoints = Big4AuthorityEndpoints()
-            return await endpoints.analyze_for_specific_authority(...)
-        """
-        
-        start_time = datetime.now(timezone.utc)
-        
-        # Validate authority
-        try:
-            authority = Big4Authority(authority_id.lower())
-        except ValueError:
-            valid_authorities = [auth.value for auth in Big4Authority]
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid authority ID: {authority_id}. Valid options: {valid_authorities}"
-            )
-        
-        logger.info(
-            "Starting authority-specific analysis",
-            authority=authority.value,
-            files=len(files),
-            industry=industry,
-            company_size=company_size
-        )
-        
-        try:
-            # Process files
-            documents = await self._process_uploaded_files(files)
-            
-            # Perform authority-specific analysis
-            analysis = await self.analyzer.analyze_for_authority(
-                documents=documents,
-                authority=authority,
-                industry=industry,
-                company_size=company_size
-            )
-            
-            # Get industry template guidance
-            template_guidance = None
-            if industry:
-                try:
-                    industry_enum = IndustryTemplate(industry.lower())
-                    template_guidance = self.template_engine.get_industry_requirements_checklist(
-                        industry_enum, authority
-                    )
-                except ValueError:
-                    logger.warning(f"Unknown industry for template: {industry}")
-            
-            # Format response
-            response = await self.formatter.format_authority_analysis_response(
-                analysis=analysis,
-                template_guidance=template_guidance,
-                processing_time=(datetime.now(timezone.utc) - start_time).total_seconds(),
-                workspace_id=workspace_id
-            )
-            
-            logger.info(
-                "Authority-specific analysis completed",
-                authority=authority.value,
-                compliance_score=analysis.compliance_score,
-                processing_time=response["processing_metadata"]["processing_time_seconds"]
-            )
-            
-            return response
-            
-        except Exception as e:
-            logger.error(
-                "Authority-specific analysis failed",
-                authority=authority.value,
-                error=str(e)
-            )
-            raise HTTPException(
-                status_code=500,
-                detail=f"Authority-specific analysis failed: {str(e)}"
-            )
-    
-    async def compare_authorities(
-        self,
-        files: List[UploadFile],
-        authorities: List[str],
-        industry: Optional[str] = None,
-        company_size: Optional[str] = None,
-        workspace_id: str = "demo",
-        db: AsyncSession = None
-    ) -> Dict[str, Any]:
-        """
-        Multi-authority comparison endpoint
-        
-        Compares compliance analysis across multiple Big 4 authorities
-        to help determine optimal jurisdiction strategy.
-        
-        Usage in enhanced_compliance.py:
-        @router.post("/compare-authorities")
-        async def compare_authority_compliance(...):
-            endpoints = Big4AuthorityEndpoints()
-            return await endpoints.compare_authorities(...)
-        """
-        
-        start_time = datetime.now(timezone.utc)
-        
-        # Validate authorities
-        validated_authorities = []
-        for auth_id in authorities:
-            try:
-                authority = Big4Authority(auth_id.lower())
-                validated_authorities.append(authority)
-            except ValueError:
-                logger.warning(f"Invalid authority ID ignored: {auth_id}")
-        
-        if len(validated_authorities) < 2:
-            raise HTTPException(
-                status_code=400,
-                detail="At least 2 valid authority IDs required for comparison"
-            )
-        
-        logger.info(
-            "Starting multi-authority comparison",
-            authorities=[auth.value for auth in validated_authorities],
-            files=len(files),
-            industry=industry
-        )
-        
-        try:
-            # Process files
-            documents = await self._process_uploaded_files(files)
-            
-            # Perform multi-authority analysis
-            comparison_result = await self.multi_analyzer.compare_authorities(
-                documents=documents,
-                authorities=validated_authorities,
-                industry=industry,
-                company_size=company_size
-            )
-            
-            # Format response
-            response = await self.formatter.format_comparison_response(
-                comparison_result=comparison_result,
-                processing_time=(datetime.now(timezone.utc) - start_time).total_seconds(),
-                workspace_id=workspace_id
-            )
-            
-            logger.info(
-                "Multi-authority comparison completed",
-                authorities=[auth.value for auth in validated_authorities],
-                recommended_primary=comparison_result.recommended_primary_authority,
-                processing_time=response["processing_metadata"]["processing_time_seconds"]
-            )
-            
-            return response
-            
-        except Exception as e:
-            logger.error(
-                "Multi-authority comparison failed",
-                authorities=[auth.value for auth in validated_authorities],
-                error=str(e)
-            )
-            raise HTTPException(
-                status_code=500,
-                detail=f"Multi-authority comparison failed: {str(e)}"
-            )
-    
-    async def detect_relevant_authorities(
-        self,
-        company_location: str,
-        industry: str,
-        company_size: str,
-        business_activities: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
-        """
-        Authority detection endpoint (no documents required)
-        
-        Helps users identify relevant German authorities based on
-        business profile before document analysis.
-        
-        Usage in enhanced_compliance.py:
-        @router.get("/authorities/detect-from-business")
-        async def detect_authorities_from_business(...):
-            endpoints = Big4AuthorityEndpoints()
-            return await endpoints.detect_relevant_authorities(...)
-        """
-        
-        logger.info(
-            "Starting business-based authority detection",
-            location=company_location,
-            industry=industry,
-            company_size=company_size
-        )
-        
-        try:
-            # Perform business-based detection
-            detection_result = await self.detector.suggest_authorities_for_business(
-                location=company_location,
-                industry=industry,
-                company_size=company_size,
-                business_activities=business_activities
-            )
-            
-            # Get recommended template
-            template_recommendation = None
-            try:
-                industry_enum = IndustryTemplate(industry.lower())
-                template_recommendation = self.template_engine.get_template(industry_enum)
-            except ValueError:
-                logger.warning(f"No template available for industry: {industry}")
-            
-            # Format response
-            response = await self.formatter.format_detection_response(
-                detection_result=detection_result,
-                template_recommendation=template_recommendation
-            )
-            
-            logger.info(
-                "Business-based authority detection completed",
-                primary_authority=detection_result.primary_authority.value,
-                confidence=detection_result.detection_confidence
-            )
-            
-            return response
-            
-        except Exception as e:
-            logger.error(
-                "Business-based authority detection failed",
-                location=company_location,
-                industry=industry,
-                error=str(e)
-            )
-            raise HTTPException(
-                status_code=500,
-                detail=f"Authority detection failed: {str(e)}"
-            )
-    
-    async def get_industry_template(
-        self,
-        industry: str,
-        authority: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Industry template endpoint
-        
-        Returns compliance template and checklist for specific industry
-        and optionally specific authority.
-        
-        Usage in enhanced_compliance.py:
-        @router.get("/templates/industry/{industry}")
-        async def get_industry_compliance_template(...):
-            endpoints = Big4AuthorityEndpoints()
-            return await endpoints.get_industry_template(...)
-        """
-        
-        try:
-            industry_enum = IndustryTemplate(industry.lower())
-        except ValueError:
-            available_industries = [template.value for template in IndustryTemplate]
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid industry: {industry}. Available: {available_industries}"
-            )
-        
-        authority_enum = None
-        if authority:
-            try:
-                authority_enum = Big4Authority(authority.lower())
-            except ValueError:
-                valid_authorities = [auth.value for auth in Big4Authority]
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid authority: {authority}. Valid options: {valid_authorities}"
-                )
-        
-        logger.info(
-            "Getting industry template",
-            industry=industry,
-            authority=authority
-        )
-        
-        try:
-            # Get template
-            template = self.template_engine.get_template(industry_enum)
-            if not template:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No template available for industry: {industry}"
-                )
-            
-            # Get authority-specific checklist if authority provided
-            checklist = None
-            if authority_enum:
-                checklist = self.template_engine.get_industry_requirements_checklist(
-                    industry_enum, authority_enum
-                )
-            
-            # Format response
-            response = await self.formatter.format_template_response(
-                template=template,
-                checklist=checklist,
-                authority=authority_enum
-            )
-            
-            return response
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(
-                "Industry template retrieval failed",
-                industry=industry,
-                authority=authority,
-                error=str(e)
-            )
-            raise HTTPException(
-                status_code=500,
-                detail=f"Template retrieval failed: {str(e)}"
-            )
-    
-    async def get_all_big4_authorities_info(self) -> Dict[str, Any]:
-        """
-        Big 4 authorities information endpoint
-        
-        Returns information about all Big 4 German authorities
-        including their profiles and focus areas.
-        
-        Usage in enhanced_compliance.py:
-        @router.get("/authorities/big4")
-        async def get_big4_authorities(...):
-            endpoints = Big4AuthorityEndpoints()
-            return await endpoints.get_all_big4_authorities_info()
-        """
-        
-        try:
-            all_authorities = get_all_big4_authorities()
-            
-            response = {
-                "authorities": [],
-                "coverage_info": {
-                    "total_authorities": len(all_authorities),
-                    "german_market_coverage": "70%",
-                    "business_coverage": sum(
-                        profile.covers_businesses for profile in all_authorities.values()
-                    )
+            authorities_info = {
+                "bfdi": {
+                    "id": "bfdi",
+                    "name": "Der Bundesbeauftragte für den Datenschutz und die Informationsfreiheit (BfDI)",
+                    "english_name": "Federal Commissioner for Data Protection and Freedom of Information",
+                    "jurisdiction": "Federal level - cross-border transfers, federal agencies",
+                    "location": "Bonn, Germany",
+                    "specializations": [
+                        "International data transfers",
+                        "Cross-border processing",
+                        "Federal government compliance",
+                        "Large multinational corporations"
+                    ],
+                    "enforcement_patterns": {
+                        "average_fine_amount": "€2.5M",
+                        "enforcement_likelihood": "Medium-High",
+                        "primary_focus": "Cross-border transfers and large enterprises",
+                        "audit_frequency": "Quarterly for large enterprises"
+                    },
+                    "contact_info": {
+                        "website": "https://www.bfdi.bund.de",
+                        "email": "poststelle@bfdi.bund.de",
+                        "phone": "+49 228 997799-0",
+                        "address": "Graurheindorfer Str. 153, 53117 Bonn"
+                    },
+                    "coverage_percentage": "25%"
+                },
+                "baylda": {
+                    "id": "baylda",
+                    "name": "Bayerisches Landesamt für Datenschutzaufsicht (BayLDA)",
+                    "english_name": "Bavarian State Office for Data Protection Supervision",
+                    "jurisdiction": "Bavaria state - automotive industry focus",
+                    "location": "Ansbach, Bavaria",
+                    "specializations": [
+                        "Automotive industry compliance",
+                        "Manufacturing data protection",
+                        "Connected vehicle privacy",
+                        "Supplier chain data agreements"
+                    ],
+                    "enforcement_patterns": {
+                        "average_fine_amount": "€1.8M",
+                        "enforcement_likelihood": "High",
+                        "primary_focus": "Automotive and manufacturing sectors",
+                        "audit_frequency": "Bi-annual for automotive companies"
+                    },
+                    "contact_info": {
+                        "website": "https://www.lda.bayern.de",
+                        "email": "poststelle@lda.bayern.de",
+                        "phone": "+49 981 180093-0",
+                        "address": "Promenade 18, 91522 Ansbach"
+                    },
+                    "coverage_percentage": "20%"
+                },
+                "lfd_bw": {
+                    "id": "lfd_bw",
+                    "name": "Der Landesbeauftragte für den Datenschutz und die Informationsfreiheit Baden-Württemberg (LfD BW)",
+                    "english_name": "State Commissioner for Data Protection and Freedom of Information Baden-Württemberg",
+                    "jurisdiction": "Baden-Württemberg state - technology and engineering focus",
+                    "location": "Stuttgart, Baden-Württemberg",
+                    "specializations": [
+                        "Software and technology companies",
+                        "Engineering and precision manufacturing",
+                        "Research and development data",
+                        "Privacy by design implementation"
+                    ],
+                    "enforcement_patterns": {
+                        "average_fine_amount": "€1.2M",
+                        "enforcement_likelihood": "Medium",
+                        "primary_focus": "Technology and software compliance",
+                        "audit_frequency": "Annual for tech companies"
+                    },
+                    "contact_info": {
+                        "website": "https://www.baden-wuerttemberg.datenschutz.de",
+                        "email": "poststelle@lfdi.bwl.de",
+                        "phone": "+49 711 615541-0",
+                        "address": "Lautenschlagerstraße 20, 70173 Stuttgart"
+                    },
+                    "coverage_percentage": "15%"
+                },
+                "ldi_nrw": {
+                    "id": "ldi_nrw",
+                    "name": "Landesbeauftragte für Datenschutz und Informationsfreiheit Nordrhein-Westfalen (LDI NRW)",
+                    "english_name": "State Commissioner for Data Protection and Freedom of Information North Rhine-Westphalia",
+                    "jurisdiction": "North Rhine-Westphalia state - manufacturing and industry focus",
+                    "location": "Düsseldorf, North Rhine-Westphalia",
+                    "specializations": [
+                        "Heavy manufacturing and industry",
+                        "Chemical and pharmaceutical sectors",
+                        "Energy and utilities data protection",
+                        "Employee data processing"
+                    ],
+                    "enforcement_patterns": {
+                        "average_fine_amount": "€1.5M",
+                        "enforcement_likelihood": "Medium-High",
+                        "primary_focus": "Manufacturing and industrial compliance",
+                        "audit_frequency": "Annual for large manufacturers"
+                    },
+                    "contact_info": {
+                        "website": "https://www.ldi.nrw.de",
+                        "email": "poststelle@ldi.nrw.de",
+                        "phone": "+49 211 38424-0",
+                        "address": "Kavalleriestraße 2-4, 40213 Düsseldorf"
+                    },
+                    "coverage_percentage": "25%"
                 }
             }
             
-            for authority, profile in all_authorities.items():
-                authority_info = {
-                    "authority_id": authority.value,
-                    "name": profile.name,
-                    "name_english": profile.name_english,
-                    "jurisdiction": profile.jurisdiction,
-                    "state_code": profile.state_code,
-                    
-                    "contact": {
-                        "website": profile.website,
-                        "email": profile.email,
-                        "phone": profile.phone
-                    },
-                    
-                    "characteristics": {
-                        "enforcement_style": profile.enforcement_profile.enforcement_style,
-                        "audit_frequency": profile.enforcement_profile.audit_frequency,
-                        "avg_penalty": profile.enforcement_profile.avg_penalty_amount,
-                        "sme_focus": profile.sme_focus,
-                        "market_share": profile.market_share
-                    },
-                    
-                    "specializations": {
-                        "industries": profile.industry_specializations,
-                        "priority_articles": profile.priority_articles,
-                        "unique_requirements": profile.unique_requirements
+            # Calculate total coverage
+            total_coverage = sum(int(info["coverage_percentage"].rstrip("%")) for info in authorities_info.values())
+            
+            response = {
+                "big4_authorities": authorities_info,
+                "summary": {
+                    "total_authorities": len(authorities_info),
+                    "total_market_coverage": f"{total_coverage}%",
+                    "geographic_coverage": [
+                        "Federal level (BfDI)",
+                        "Bavaria (BayLDA)",
+                        "Baden-Württemberg (LfD BW)",
+                        "North Rhine-Westphalia (LDI NRW)"
+                    ],
+                    "industry_specializations": {
+                        "automotive": ["baylda"],
+                        "technology": ["lfd_bw"],
+                        "manufacturing": ["baylda", "ldi_nrw"],
+                        "international": ["bfdi"],
+                        "federal_agencies": ["bfdi"]
                     }
+                },
+                "selection_guidance": {
+                    "primary_factors": [
+                        "Company location and primary operations",
+                        "Industry sector and specialization",
+                        "Data processing activities and scope",
+                        "International transfer requirements"
+                    ],
+                    "decision_matrix": {
+                        "automotive_bavaria": "baylda",
+                        "software_baden_wurttemberg": "lfd_bw",
+                        "manufacturing_nrw": "ldi_nrw",
+                        "international_transfers": "bfdi",
+                        "federal_government": "bfdi"
+                    }
+                },
+                "metadata": {
+                    "last_updated": datetime.now(timezone.utc).isoformat(),
+                    "data_source": "Big 4 Authority Intelligence Engine",
+                    "coverage_note": "Covers approximately 85% of German SME market"
                 }
-                
-                response["authorities"].append(authority_info)
+            }
             
             return response
             
@@ -533,7 +188,7 @@ class Big4AuthorityEndpoints:
             )
     
     # Helper methods
-    async def _process_uploaded_files(self, files: List[UploadFile]) -> List[Document]:
+    async def _process_uploaded_files(self, files: List[UploadFile]) -> List[Any]:
         """Process uploaded files into Document objects"""
         
         if len(files) > settings.max_files_per_batch:
@@ -559,11 +214,11 @@ class Big4AuthorityEndpoints:
             file_size = len(content)
             total_size += file_size
             
-            # Check total size limit
-            if total_size > settings.max_total_file_size:
+            # FIXED: Check total size limit using the correct property
+            if total_size > settings.max_total_file_size_bytes:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Total file size exceeds limit: {settings.max_total_file_size} bytes"
+                    detail=f"Total file size exceeds limit: {settings.max_total_file_size_mb}MB"
                 )
             
             # Create Document object
@@ -583,6 +238,141 @@ class Big4AuthorityEndpoints:
             documents.append(document)
         
         return documents
+    
+    def _generate_key_differences(self, analyses: Dict[str, Dict]) -> List[str]:
+        """Generate key differences between authority analyses"""
+        
+        differences = []
+        
+        # Compare compliance scores
+        scores = {auth: data["compliance_score"] for auth, data in analyses.items()}
+        max_score_auth = max(scores, key=scores.get)
+        min_score_auth = min(scores, key=scores.get)
+        
+        differences.append(
+            f"Compliance scores vary significantly: {max_score_auth} ({scores[max_score_auth]:.1%}) "
+            f"vs {min_score_auth} ({scores[min_score_auth]:.1%})"
+        )
+        
+        # Compare enforcement likelihood
+        enforcement = {auth: data["enforcement_likelihood"] for auth, data in analyses.items()}
+        max_enforcement_auth = max(enforcement, key=enforcement.get)
+        min_enforcement_auth = min(enforcement, key=enforcement.get)
+        
+        differences.append(
+            f"Enforcement risk differs: {max_enforcement_auth} ({enforcement[max_enforcement_auth]:.1%}) "
+            f"vs {min_enforcement_auth} ({enforcement[min_enforcement_auth]:.1%})"
+        )
+        
+        # Compare missing requirements
+        missing_reqs = {auth: len(data["requirements_missing"]) for auth, data in analyses.items()}
+        max_missing_auth = max(missing_reqs, key=missing_reqs.get)
+        min_missing_auth = min(missing_reqs, key=missing_reqs.get)
+        
+        differences.append(
+            f"Requirements gap: {max_missing_auth} has {missing_reqs[max_missing_auth]} missing requirements "
+            f"vs {min_missing_auth} with {missing_reqs[min_missing_auth]}"
+        )
+        
+        return differences
+    
+    def _generate_strategic_recommendations(self, analyses: Dict[str, Dict], industry: Optional[str]) -> List[str]:
+        """Generate strategic recommendations based on comparison"""
+        
+        recommendations = []
+        
+        # Find authority with highest compliance score
+        best_compliance = max(analyses.items(), key=lambda x: x[1]["compliance_score"])
+        recommendations.append(
+            f"Primary recommendation: Choose {best_compliance[0]} for highest compliance alignment"
+        )
+        
+        # Find authority with lowest enforcement risk
+        lowest_enforcement = min(analyses.items(), key=lambda x: x[1]["enforcement_likelihood"])
+        recommendations.append(
+            f"Risk mitigation: {lowest_enforcement[0]} shows lowest enforcement likelihood"
+        )
+        
+        # Industry-specific recommendations
+        if industry:
+            industry_specific = {
+                "automotive": "Consider BayLDA for automotive industry expertise",
+                "software": "LfD BW offers specialized software compliance guidance",
+                "manufacturing": "LDI NRW has strong manufacturing sector focus",
+                "technology": "LfD BW provides technology-focused compliance support"
+            }
+            
+            if industry in industry_specific:
+                recommendations.append(industry_specific[industry])
+        
+        # General strategic advice
+        recommendations.extend([
+            "Consider establishing relationships with multiple authorities for comprehensive coverage",
+            "Implement compliance measures that satisfy the most stringent requirements",
+            "Regular compliance audits can improve scores across all jurisdictions"
+        ])
+        
+        return recommendations[:5]  # Limit to top 5 recommendations
+    
+    def _get_authority_customizations(self, authority: str, industry: str) -> Dict[str, Any]:
+        """Get authority-specific template customizations"""
+        
+        customizations = {
+            "bfdi": {
+                "focus_areas": ["International data transfers", "Cross-border processing"],
+                "additional_documents": ["Transfer Impact Assessment", "Adequacy Decision Review"],
+                "specific_clauses": [
+                    "International transfer safeguards",
+                    "Cross-border processing notifications",
+                    "Federal compliance reporting"
+                ]
+            },
+            "baylda": {
+                "focus_areas": ["Automotive compliance", "Connected vehicle data"],
+                "additional_documents": ["Vehicle Data Processing Notice", "Supplier Data Agreement"],
+                "specific_clauses": [
+                    "Automotive telematics compliance",
+                    "Connected service data protection",
+                    "Supplier chain data agreements"
+                ]
+            },
+            "lfd_bw": {
+                "focus_areas": ["Privacy by design", "Software compliance"],
+                "additional_documents": ["Privacy by Design Documentation", "API Privacy Terms"],
+                "specific_clauses": [
+                    "Software privacy by design",
+                    "API data processing transparency",
+                    "Technology compliance frameworks"
+                ]
+            },
+            "ldi_nrw": {
+                "focus_areas": ["Manufacturing compliance", "Employee data"],
+                "additional_documents": ["Employee Data Policy", "Manufacturing Data Notice"],
+                "specific_clauses": [
+                    "Manufacturing data protection",
+                    "Employee monitoring compliance",
+                    "Industrial data processing"
+                ]
+            }
+        }
+        
+        base_customization = customizations.get(authority, {})
+        
+        # Add industry-specific elements
+        if industry == "automotive" and authority == "baylda":
+            base_customization["priority_requirements"] = [
+                "Connected vehicle consent mechanisms",
+                "Automotive supplier data agreements",
+                "Vehicle telematics privacy notices"
+            ]
+        elif industry == "software" and authority == "lfd_bw":
+            base_customization["priority_requirements"] = [
+                "Privacy by design implementation",
+                "API data processing documentation",
+                "User consent management systems"
+            ]
+        
+        return base_customization
 
 # Integration helper functions for enhanced_compliance.py
 def create_big4_authority_endpoints() -> Big4AuthorityEndpoints:
@@ -595,174 +385,535 @@ def get_big4_endpoint_routes():
     
     Returns dictionary with route definitions that can be added to FastAPI router.
     """
-    
     return {
         "analyze_with_authority_detection": {
             "path": "/analyze-with-authority-detection",
             "method": "POST",
-            "description": "Smart authority detection and analysis",
-            "parameters": [
-                "files: List[UploadFile]",
-                "industry: Optional[str] = Form(None)",
-                "company_location: Optional[str] = Form(None)",
-                "company_size: Optional[str] = Form(None)",
-                "workspace_id: str = Form(default=DEMO_WORKSPACE_ID)"
-            ]
+            "description": "Smart Authority Detection + Analysis"
         },
-        
         "analyze_authority_specific": {
             "path": "/analyze-authority/{authority_id}",
             "method": "POST", 
-            "description": "Authority-specific compliance analysis",
-            "parameters": [
-                "authority_id: str",
-                "files: List[UploadFile]",
-                "industry: Optional[str] = Form(None)",
-                "company_size: Optional[str] = Form(None)",
-                "workspace_id: str = Form(default=DEMO_WORKSPACE_ID)"
-            ]
+            "description": "Authority-Specific Compliance Analysis"
         },
-        
         "compare_authorities": {
             "path": "/compare-authorities",
             "method": "POST",
-            "description": "Multi-authority compliance comparison",
-            "parameters": [
-                "files: List[UploadFile]",
-                "authorities: List[str] = Form(...)",
-                "industry: Optional[str] = Form(None)",
-                "company_size: Optional[str] = Form(None)",
-                "workspace_id: str = Form(default=DEMO_WORKSPACE_ID)"
-            ]
+            "description": "Multi-Authority Compliance Comparison"
         },
-        
-        "detect_authorities_from_business": {
+        "detect_from_business": {
             "path": "/authorities/detect-from-business",
             "method": "GET",
-            "description": "Detect relevant authorities from business profile",
-            "parameters": [
-                "company_location: str = Query(...)",
-                "industry: str = Query(...)", 
-                "company_size: str = Query(...)",
-                "business_activities: Optional[List[str]] = Query(None)"
-            ]
+            "description": "Business Profile Authority Detection"
         },
-        
-        "get_industry_template": {
+        "industry_templates": {
             "path": "/templates/industry/{industry}",
             "method": "GET",
-            "description": "Get industry-specific compliance template",
-            "parameters": [
-                "industry: str",
-                "authority: Optional[str] = Query(None)"
-            ]
+            "description": "Industry-Specific Compliance Templates"
         },
-        
-        "get_big4_authorities": {
+        "big4_info": {
             "path": "/authorities/big4",
-            "method": "GET", 
-            "description": "Get Big 4 German authorities information",
-            "parameters": []
+            "method": "GET",
+            "description": "Big 4 German Authorities Information"
         }
     }
-
-# Integration code snippet for enhanced_compliance.py
-INTEGRATION_CODE_SNIPPET = '''
-# Add these imports to enhanced_compliance.py
-from app.services.german_authority_engine.integration.authority_endpoints import (
-    Big4AuthorityEndpoints, create_big4_authority_endpoints
-)
-
-# Add this after existing router initialization
-big4_endpoints = create_big4_authority_endpoints()
-
-# Add these new endpoints to your router
-
-@router.post("/analyze-with-authority-detection")
-async def analyze_with_authority_detection(
-    files: List[UploadFile] = File(...),
-    industry: Optional[str] = Form(None),
-    company_location: Optional[str] = Form(None), 
-    company_size: Optional[str] = Form(None),
-    workspace_id: str = Form(default=DEMO_WORKSPACE_ID),
-    db: AsyncSession = Depends(get_db_session)
-):
-    """Smart authority detection and comprehensive analysis"""
-    return await big4_endpoints.analyze_with_smart_detection(
-        files=files,
-        industry=industry,
-        company_location=company_location,
-        company_size=company_size,
-        workspace_id=workspace_id,
-        db=db
-    )
-
-@router.post("/analyze-authority/{authority_id}")
-async def analyze_authority_specific(
-    authority_id: str,
-    files: List[UploadFile] = File(...),
-    industry: Optional[str] = Form(None),
-    company_size: Optional[str] = Form(None),
-    workspace_id: str = Form(default=DEMO_WORKSPACE_ID),
-    db: AsyncSession = Depends(get_db_session)
-):
-    """Authority-specific compliance analysis"""
-    return await big4_endpoints.analyze_for_specific_authority(
-        authority_id=authority_id,
-        files=files,
-        industry=industry,
-        company_size=company_size,
-        workspace_id=workspace_id,
-        db=db
-    )
-
-@router.post("/compare-authorities")
-async def compare_authority_compliance(
-    files: List[UploadFile] = File(...),
-    authorities: List[str] = Form(...),
-    industry: Optional[str] = Form(None),
-    company_size: Optional[str] = Form(None),
-    workspace_id: str = Form(default=DEMO_WORKSPACE_ID),
-    db: AsyncSession = Depends(get_db_session)
-):
-    """Multi-authority compliance comparison"""
-    return await big4_endpoints.compare_authorities(
-        files=files,
-        authorities=authorities,
-        industry=industry,
-        company_size=company_size,
-        workspace_id=workspace_id,
-        db=db
-    )
-
-@router.get("/authorities/detect-from-business")
-async def detect_authorities_from_business(
-    company_location: str = Query(...),
-    industry: str = Query(...),
-    company_size: str = Query(...),
-    business_activities: Optional[List[str]] = Query(None)
-):
-    """Detect relevant authorities from business profile"""
-    return await big4_endpoints.detect_relevant_authorities(
-        company_location=company_location,
-        industry=industry,
-        company_size=company_size,
-        business_activities=business_activities
-    )
-
-@router.get("/templates/industry/{industry}")
-async def get_industry_compliance_template(
-    industry: str,
-    authority: Optional[str] = Query(None)
-):
-    """Get industry-specific compliance template"""
-    return await big4_endpoints.get_industry_template(
-        industry=industry,
-        authority=authority
-    )
-
-@router.get("/authorities/big4")
-async def get_big4_authorities():
-    """Get Big 4 German authorities information"""
-    return await big4_endpoints.get_all_big4_authorities_info()
-'''
+            from ..big4.big4_detector import Big4AuthorityDetector
+            from ..big4.big4_analyzer import Big4ComplianceAnalyzer
+            from .. import get_all_authorities
+            
+            self.detector = Big4AuthorityDetector()
+            self.analyzer = Big4ComplianceAnalyzer()
+            self.get_all_authorities = get_all_authorities
+            
+            logger.info("Big 4 Authority Engine components initialized successfully")
+            
+        except ImportError as e:
+            logger.error(f"Failed to import Big 4 components: {e}")
+            self.detector = None
+            self.analyzer = None
+            self.get_all_authorities = None
+    
+    async def analyze_with_smart_detection(
+        self,
+        files: List[UploadFile],
+        industry: Optional[str] = None,
+        company_location: Optional[str] = None,
+        company_size: Optional[str] = None,
+        workspace_id: str = None,
+        db: AsyncSession = None
+    ) -> Dict[str, Any]:
+        """
+        Smart Authority Detection + Analysis
+        
+        Automatically detects relevant authorities and provides analysis
+        """
+        try:
+            if not self.detector or not self.analyzer:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Big 4 Authority Engine not available"
+                )
+            
+            # Process uploaded files
+            documents = await self._process_uploaded_files(files)
+            
+            # Detect relevant authorities with business context
+            detection_result = await self.detector.detect_relevant_authorities(
+                documents=documents,
+                suggested_industry=industry,
+                suggested_state=company_location
+            )
+            
+            if not detection_result.primary_authority:
+                return {
+                    "detection_result": "no_authority_detected",
+                    "message": "No specific German authority detected for this content",
+                    "suggested_actions": [
+                        "Review document content for German-specific terms",
+                        "Consider using general GDPR compliance analysis"
+                    ]
+                }
+            
+            # Perform analysis for detected authority
+            analysis = await self.analyzer.analyze_for_authority(
+                documents=documents,
+                authority=detection_result.primary_authority,
+                industry=industry or "unknown"
+            )
+            
+            return {
+                "detection_result": "success",
+                "detected_authority": {
+                    "id": detection_result.primary_authority.value,
+                    "name": analysis.authority_name,
+                    "confidence": detection_result.detection_confidence,
+                    "detection_reasons": detection_result.detection_reasons
+                },
+                "compliance_analysis": {
+                    "compliance_score": analysis.compliance_score,
+                    "enforcement_likelihood": analysis.enforcement_likelihood,
+                    "penalty_risk_level": analysis.penalty_risk_level,
+                    "audit_readiness_score": analysis.audit_readiness_score,
+                    "requirements_missing": analysis.requirements_missing,
+                    "requirements_met": analysis.requirements_met,
+                    "industry_specific_guidance": analysis.industry_specific_guidance,
+                    "next_steps": analysis.next_steps,
+                    "estimated_penalty_range": analysis.estimated_penalty_range
+                },
+                "metadata": {
+                    "analysis_timestamp": datetime.now(timezone.utc).isoformat(),
+                    "documents_analyzed": len(documents),
+                    "industry_detected": industry,
+                    "company_location": company_location,
+                    "workspace_id": workspace_id
+                }
+            }
+            
+        except Exception as e:
+            logger.error("Smart authority detection failed", error=str(e))
+            raise HTTPException(
+                status_code=500,
+                detail=f"Smart authority detection failed: {str(e)}"
+            )
+    
+    async def analyze_for_specific_authority(
+        self,
+        authority_id: str,
+        files: List[UploadFile],
+        industry: Optional[str] = None,
+        company_size: Optional[str] = None,
+        workspace_id: str = None,
+        db: AsyncSession = None
+    ) -> Dict[str, Any]:
+        """
+        Authority-Specific Compliance Analysis
+        
+        Detailed analysis for a specific German authority
+        """
+        try:
+            if not self.analyzer:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Big 4 Authority Engine not available"
+                )
+            
+            # Validate authority ID
+            valid_authorities = ['bfdi', 'baylda', 'lfd_bw', 'ldi_nrw']
+            if authority_id not in valid_authorities:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid authority ID: {authority_id}. Valid options: {', '.join(valid_authorities)}"
+                )
+            
+            # Process uploaded files
+            documents = await self._process_uploaded_files(files)
+            
+            # Convert authority_id to enum
+            from ..big4.models import GermanAuthority
+            authority_enum = GermanAuthority(authority_id)
+            
+            # Perform analysis
+            analysis = await self.analyzer.analyze_for_authority(
+                documents=documents,
+                authority=authority_enum,
+                industry=industry or "unknown"
+            )
+            
+            return {
+                "analysis_result": "success",
+                "authority": {
+                    "id": authority_id,
+                    "name": analysis.authority_name
+                },
+                "compliance_analysis": {
+                    "compliance_score": analysis.compliance_score,
+                    "enforcement_likelihood": analysis.enforcement_likelihood,
+                    "penalty_risk_level": analysis.penalty_risk_level,
+                    "audit_readiness_score": analysis.audit_readiness_score,
+                    "requirements_missing": analysis.requirements_missing,
+                    "requirements_met": analysis.requirements_met,
+                    "industry_specific_guidance": analysis.industry_specific_guidance,
+                    "enforcement_patterns": analysis.enforcement_patterns,
+                    "audit_preparation_steps": analysis.audit_preparation_steps,
+                    "estimated_penalty_range": analysis.estimated_penalty_range,
+                    "contact_information": analysis.contact_information
+                },
+                "recommendations": {
+                    "immediate_actions": analysis.next_steps[:3],
+                    "medium_term_goals": analysis.next_steps[3:6] if len(analysis.next_steps) > 3 else [],
+                    "long_term_strategy": analysis.next_steps[6:] if len(analysis.next_steps) > 6 else []
+                },
+                "metadata": {
+                    "analysis_timestamp": datetime.now(timezone.utc).isoformat(),
+                    "documents_analyzed": len(documents),
+                    "industry": industry,
+                    "company_size": company_size,
+                    "workspace_id": workspace_id
+                }
+            }
+            
+        except Exception as e:
+            logger.error("Authority-specific analysis failed", authority_id=authority_id, error=str(e))
+            raise HTTPException(
+                status_code=500,
+                detail=f"Authority-specific analysis failed: {str(e)}"
+            )
+    
+    async def compare_authorities(
+        self,
+        files: List[UploadFile],
+        authorities: List[str],
+        industry: Optional[str] = None,
+        company_size: Optional[str] = None,
+        workspace_id: str = None,
+        db: AsyncSession = None
+    ) -> Dict[str, Any]:
+        """
+        Multi-Authority Compliance Comparison
+        
+        Compare compliance analysis across multiple authorities
+        """
+        try:
+            if not self.analyzer:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Big 4 Authority Engine not available"
+                )
+            
+            # Validate authorities
+            valid_authorities = ['bfdi', 'baylda', 'lfd_bw', 'ldi_nrw']
+            invalid_authorities = [auth for auth in authorities if auth not in valid_authorities]
+            
+            if invalid_authorities:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid authority IDs: {', '.join(invalid_authorities)}. Valid options: {', '.join(valid_authorities)}"
+                )
+            
+            if len(authorities) < 2:
+                raise HTTPException(
+                    status_code=400,
+                    detail="At least 2 valid authority IDs required for comparison"
+                )
+            
+            # Process uploaded files
+            documents = await self._process_uploaded_files(files)
+            
+            # Analyze for each authority
+            comparison_results = {}
+            
+            from ..big4.models import GermanAuthority
+            
+            for authority_id in authorities:
+                try:
+                    authority_enum = GermanAuthority(authority_id)
+                    analysis = await self.analyzer.analyze_for_authority(
+                        documents=documents,
+                        authority=authority_enum,
+                        industry=industry or "unknown"
+                    )
+                    
+                    comparison_results[authority_id] = {
+                        "authority_name": analysis.authority_name,
+                        "compliance_score": analysis.compliance_score,
+                        "enforcement_likelihood": analysis.enforcement_likelihood,
+                        "penalty_risk_level": analysis.penalty_risk_level,
+                        "audit_readiness_score": analysis.audit_readiness_score,
+                        "requirements_missing": analysis.requirements_missing,
+                        "estimated_penalty_range": analysis.estimated_penalty_range,
+                        "key_advantages": analysis.industry_specific_guidance[:3],
+                        "primary_concerns": analysis.requirements_missing[:3]
+                    }
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to analyze for authority {authority_id}: {e}")
+                    comparison_results[authority_id] = {
+                        "error": f"Analysis failed: {str(e)}"
+                    }
+            
+            # Generate comparison insights
+            successful_analyses = {k: v for k, v in comparison_results.items() if "error" not in v}
+            
+            if not successful_analyses:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to analyze for any of the specified authorities"
+                )
+            
+            # Find best and worst options
+            best_authority = max(successful_analyses.items(), 
+                               key=lambda x: x[1].get("compliance_score", 0))
+            
+            worst_authority = min(successful_analyses.items(), 
+                                key=lambda x: x[1].get("compliance_score", 1))
+            
+            return {
+                "comparison_result": "success",
+                "authorities_compared": authorities,
+                "detailed_comparison": comparison_results,
+                "summary": {
+                    "recommended_authority": {
+                        "id": best_authority[0],
+                        "name": best_authority[1]["authority_name"],
+                        "compliance_score": best_authority[1]["compliance_score"],
+                        "reasons": [
+                            f"Highest compliance score: {best_authority[1]['compliance_score']:.1%}",
+                            f"Lower enforcement risk: {best_authority[1]['enforcement_likelihood']:.1%}",
+                            "Better alignment with current documentation"
+                        ]
+                    },
+                    "least_favorable": {
+                        "id": worst_authority[0],
+                        "name": worst_authority[1]["authority_name"],
+                        "compliance_score": worst_authority[1]["compliance_score"],
+                        "concerns": worst_authority[1]["primary_concerns"]
+                    },
+                    "key_differences": self._generate_key_differences(successful_analyses),
+                    "strategic_recommendations": self._generate_strategic_recommendations(successful_analyses, industry)
+                },
+                "metadata": {
+                    "analysis_timestamp": datetime.now(timezone.utc).isoformat(),
+                    "documents_analyzed": len(documents),
+                    "industry": industry,
+                    "company_size": company_size,
+                    "workspace_id": workspace_id
+                }
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("Authority comparison failed", error=str(e))
+            raise HTTPException(
+                status_code=500,
+                detail=f"Authority comparison failed: {str(e)}"
+            )
+    
+    async def detect_relevant_authorities(
+        self,
+        company_location: str,
+        industry: str,
+        company_size: str,
+        business_activities: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Business Profile Authority Detection
+        
+        Detect relevant authorities based on business profile without documents
+        """
+        try:
+            if not self.detector:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Big 4 Authority Engine not available"
+                )
+            
+            # Use business profile detection
+            detection_result = await self.detector.detect_from_business_profile(
+                industry=industry,
+                location=company_location,
+                company_size=company_size,
+                business_activities=business_activities or []
+            )
+            
+            return {
+                "detection_result": "success",
+                "primary_authority": {
+                    "id": detection_result.primary_authority.value,
+                    "confidence": detection_result.detection_confidence,
+                    "reasons": detection_result.detection_reasons
+                },
+                "alternative_authorities": [
+                    {
+                        "id": auth.value,
+                        "relevance_score": score
+                    }
+                    for auth, score in detection_result.alternative_authorities.items()
+                ],
+                "business_profile": {
+                    "industry": industry,
+                    "location": company_location,
+                    "company_size": company_size,
+                    "activities": business_activities
+                },
+                "next_steps": [
+                    f"Consider {detection_result.primary_authority.value} as primary authority",
+                    "Upload documents for detailed compliance analysis",
+                    "Review authority-specific requirements"
+                ]
+            }
+            
+        except Exception as e:
+            logger.error("Business profile authority detection failed", error=str(e))
+            raise HTTPException(
+                status_code=500,
+                detail=f"Business profile authority detection failed: {str(e)}"
+            )
+    
+    async def get_industry_template(
+        self,
+        industry: str,
+        authority: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Industry-Specific Compliance Templates
+        
+        Get pre-configured templates for specific industries
+        """
+        try:
+            # Industry template mapping
+            industry_templates = {
+                "automotive": {
+                    "name": "Automotive Industry GDPR Template",
+                    "description": "Connected vehicles, supplier data, customer profiling",
+                    "key_documents": [
+                        "Privacy Policy for Connected Services",
+                        "Supplier Data Processing Agreement",
+                        "Customer Data Collection Notice",
+                        "Data Sharing Agreement Template",
+                        "Incident Response Plan"
+                    ],
+                    "specific_requirements": [
+                        "Vehicle telematics data protection",
+                        "Cross-border data transfers for manufacturing",
+                        "Customer consent for connected services",
+                        "Supplier chain data agreements"
+                    ]
+                },
+                "software": {
+                    "name": "Software/SaaS GDPR Template",
+                    "description": "Privacy by design, API compliance, user data",
+                    "key_documents": [
+                        "Privacy by Design Documentation",
+                        "API Data Processing Terms",
+                        "User Consent Management",
+                        "Data Retention Policy",
+                        "Security Incident Response"
+                    ],
+                    "specific_requirements": [
+                        "Privacy by design implementation",
+                        "API data processing transparency",
+                        "User consent management systems",
+                        "Data portability mechanisms"
+                    ]
+                },
+                "manufacturing": {
+                    "name": "Manufacturing GDPR Template",
+                    "description": "IoT compliance, employee monitoring, supply chain",
+                    "key_documents": [
+                        "Employee Monitoring Policy",
+                        "IoT Device Data Policy",
+                        "Supply Chain Data Agreement",
+                        "Workplace Privacy Notice",
+                        "Data Processing Impact Assessment"
+                    ],
+                    "specific_requirements": [
+                        "Employee monitoring compliance",
+                        "IoT device data collection rules",
+                        "Supply chain data protection",
+                        "Workplace surveillance limitations"
+                    ]
+                },
+                "healthcare": {
+                    "name": "Healthcare GDPR Template",
+                    "description": "Patient data, medical research, health records",
+                    "key_documents": [
+                        "Patient Data Privacy Notice",
+                        "Medical Research Consent",
+                        "Health Record Processing Policy",
+                        "Data Sharing Agreement (Medical)",
+                        "Breach Notification Procedure"
+                    ],
+                    "specific_requirements": [
+                        "Special category data protection",
+                        "Medical research consent procedures",
+                        "Health record access controls",
+                        "Patient rights management"
+                    ]
+                }
+            }
+            
+            if industry not in industry_templates:
+                available_industries = list(industry_templates.keys())
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Industry template not available for '{industry}'. Available: {', '.join(available_industries)}"
+                )
+            
+            template = industry_templates[industry].copy()
+            
+            # Add authority-specific customizations if specified
+            if authority:
+                template["authority_customizations"] = self._get_authority_customizations(authority, industry)
+            
+            template["generation_timestamp"] = datetime.now(timezone.utc).isoformat()
+            template["industry"] = industry
+            template["authority"] = authority
+            
+            return {
+                "template_result": "success",
+                "industry_template": template,
+                "usage_instructions": [
+                    "Review and customize the template documents for your specific use case",
+                    "Ensure all industry-specific requirements are addressed",
+                    "Consider authority-specific customizations if applicable",
+                    "Test the compliance framework with sample data"
+                ]
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("Industry template generation failed", industry=industry, error=str(e))
+            raise HTTPException(
+                status_code=500,
+                detail=f"Industry template generation failed: {str(e)}"
+            )
+    
+    async def get_all_big4_authorities_info(self) -> Dict[str, Any]:
+        """
+        Big 4 German Authorities Information
+        
+        Complete information about all Big 4 authorities
+        """
+        try:

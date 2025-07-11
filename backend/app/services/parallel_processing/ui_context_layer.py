@@ -1,12 +1,9 @@
 # app/services/parallel_processing/ui_context_layer.py
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from enum import Enum
 import structlog
 import re
-
-from .job_queue import DocumentJob
-from ..docling_processor import DoclingProcessor
 
 logger = structlog.get_logger()
 
@@ -35,6 +32,7 @@ class GermanAuthority(Enum):
     BFDI = "bfdi"  # Federal
     BAYLDA = "baylda"  # Bavaria
     LFD_BW = "lfd_bw"  # Baden-Württemberg
+    LDI_NRW = "ldi_nrw"  # North Rhine-Westphalia
     BERLIN_BFDI = "berlin_bfdi"
     UNKNOWN = "unknown"
 
@@ -121,6 +119,15 @@ class UIContextLayer:
     """Intelligent UI context detection for zero-friction compliance analysis"""
     
     def __init__(self):
+        # Import DocumentJob here to avoid circular imports
+        try:
+            from .job_queue import DocumentJob
+            self.DocumentJob = DocumentJob
+        except ImportError:
+            # Fallback for cases where job_queue isn't available
+            self.DocumentJob = None
+            logger.warning("DocumentJob not available - some features may be limited")
+        
         # Document type patterns for detection
         self.document_patterns = {
             'privacy_policy': [
@@ -144,61 +151,28 @@ class UIContextLayer:
                 'data processing agreement', 'auftragsverarbeitungsvertrag'
             ],
             'breach_response': [
-                'breach', 'incident', 'datenpanne', 'sicherheitsvorfall',
-                'breach response', 'incident response'
+                'breach', 'incident', 'security event', 'datenpanne',
+                'data leak', 'unauthorized access', 'cyberattack'
             ],
-            'training_material': [
-                'training', 'schulung', 'awareness', 'sensibilisierung',
-                'employee training', 'mitarbeiterschulung'
+            'policy_review': [
+                'policy review', 'richtlinien überprüfung',
+                'policy update', 'revision', 'überarbeitung'
             ],
-            'audit_document': [
-                'audit', 'prüfung', 'compliance report', 'compliance-bericht',
-                'assessment', 'bewertung'
-            ]
-        }
-        
-        # Industry detection patterns
-        self.industry_patterns = {
-            IndustryType.AUTOMOTIVE: [
-                'fahrzeug', 'automotive', 'car', 'vehicle', 'kfz',
-                'bmw', 'mercedes', 'audi', 'porsche', 'volkswagen',
-                'connected car', 'telematics', 'kba'
-            ],
-            IndustryType.HEALTHCARE: [
-                'patient', 'medical', 'health', 'gesundheit', 'kranken',
-                'hospital', 'clinic', 'arzt', 'medicine', 'pharma',
-                'bfarm', 'medical device', 'clinical trial'
-            ],
-            IndustryType.MANUFACTURING: [
-                'manufacturing', 'production', 'factory', 'plant',
-                'industrie', 'fertigung', 'produktion', 'maschinenbau',
-                'industry 4.0', 'iot', 'sensor'
-            ],
-            IndustryType.FINANCIAL: [
-                'bank', 'financial', 'insurance', 'finanz', 'versicherung',
-                'bafin', 'payment', 'credit', 'loan', 'investment'
-            ],
-            IndustryType.TECHNOLOGY: [
-                'software', 'technology', 'tech', 'digital', 'platform',
-                'saas', 'cloud', 'api', 'data processing'
-            ],
-            IndustryType.RETAIL: [
-                'retail', 'shop', 'store', 'customer', 'ecommerce',
-                'online shop', 'marketplace', 'consumer'
+            'vendor_assessment': [
+                'vendor', 'supplier', 'third party', 'lieferant',
+                'service provider', 'contractor', 'partner'
             ]
         }
         
         # Scenario detection patterns
         self.scenario_patterns = {
             AuditScenario.AUDIT_PREPARATION: [
-                'audit', 'prüfung', 'inspection', 'inspektion',
-                'compliance check', 'regulatory review',
-                'authority visit', 'behördliche prüfung'
+                'audit', 'prüfung', 'inspection', 'compliance check',
+                'authority visit', 'behördliche prüfung', 'kontrolle'
             ],
             AuditScenario.NEW_SERVICE_LAUNCH: [
-                'new service', 'product launch', 'neuer service',
-                'go-live', 'rollout', 'implementation',
-                'service introduction'
+                'new service', 'launch', 'product release', 'rollout',
+                'market entry', 'service introduction', 'neuer service'
             ],
             AuditScenario.INCIDENT_RESPONSE: [
                 'breach', 'incident', 'security event', 'datenpanne',
@@ -211,6 +185,34 @@ class UIContextLayer:
             AuditScenario.VENDOR_ASSESSMENT: [
                 'vendor', 'supplier', 'third party', 'lieferant',
                 'service provider', 'contractor', 'partner'
+            ]
+        }
+        
+        # Industry detection patterns
+        self.industry_patterns = {
+            IndustryType.AUTOMOTIVE: [
+                'automotive', 'car', 'vehicle', 'bmw', 'mercedes', 'audi',
+                'porsche', 'manufacturing', 'fahrzeug', 'automobil'
+            ],
+            IndustryType.HEALTHCARE: [
+                'healthcare', 'medical', 'hospital', 'patient', 'gesundheit',
+                'medizin', 'klinik', 'arzt', 'health data'
+            ],
+            IndustryType.MANUFACTURING: [
+                'manufacturing', 'production', 'factory', 'industrial',
+                'herstellung', 'produktion', 'fertigung', 'industrie'
+            ],
+            IndustryType.FINANCIAL: [
+                'financial', 'bank', 'insurance', 'payment', 'fintech',
+                'finanzen', 'versicherung', 'zahlung', 'kredit'
+            ],
+            IndustryType.TECHNOLOGY: [
+                'technology', 'software', 'app', 'digital', 'tech',
+                'technologie', 'software', 'digital', 'it'
+            ],
+            IndustryType.RETAIL: [
+                'retail', 'shop', 'store', 'e-commerce', 'customer',
+                'handel', 'laden', 'geschäft', 'verkauf'
             ]
         }
         
@@ -228,15 +230,51 @@ class UIContextLayer:
                 'lfd', 'baden-württemberg', 'stuttgart', 'mercedes',
                 'porsche', 'engineering'
             ],
+            GermanAuthority.LDI_NRW: [
+                'ldi', 'nrw', 'north rhine', 'düsseldorf', 'cologne',
+                'manufacturing', 'industry'
+            ],
             GermanAuthority.BERLIN_BFDI: [
                 'berlin', 'hauptstadt', 'government', 'regierung'
             ]
         }
     
-    # NEW METHOD: German content detection for authority activation
-    def _detect_german_content(self, content: str) -> bool:
-        """Quick German content detection for authority activation"""
+    # FIXED: Make method public and add fallback for different content types
+    def detect_german_content(self, content) -> bool:
+        """
+        Public method for German content detection - can handle bytes or str
         
+        Args:
+            content: Document content (bytes, str, or other)
+            
+        Returns:
+            bool: True if German content detected
+        """
+        try:
+            # Handle different content types
+            if isinstance(content, bytes):
+                content_str = content.decode('utf-8', errors='ignore')
+            elif isinstance(content, str):
+                content_str = content
+            else:
+                content_str = str(content)
+            
+            return self._detect_german_content_internal(content_str)
+            
+        except Exception as e:
+            logger.warning(f"German content detection failed: {e}")
+            return False
+    
+    def _detect_german_content_internal(self, content: str) -> bool:
+        """
+        Internal German content detection logic
+        
+        Args:
+            content: String content to analyze
+            
+        Returns:
+            bool: True if German content detected
+        """
         german_indicators = [
             "dsgvo", "datenschutz", "verarbeitung", "einwilligung",
             "personenbezogene daten", "betroffenenrechte", "dsfa",
@@ -246,7 +284,7 @@ class UIContextLayer:
             "datenschutz-folgenabschätzung", "verfahrensverzeichnis"
         ]
         
-        content_lower = content.lower() if isinstance(content, str) else str(content).lower()
+        content_lower = content.lower()
         german_count = sum(1 for indicator in german_indicators if indicator in content_lower)
         
         # Also check for German legal article references
@@ -262,13 +300,26 @@ class UIContextLayer:
         
         return german_count >= 2 or article_matches >= 1
     
-    def analyze_ui_context(self, jobs: List[DocumentJob]) -> UIContext:
-        """Analyze document jobs to create intelligent UI context"""
+    # Legacy method for backward compatibility - FIXED
+    def _detect_german_content(self, content) -> bool:
+        """Legacy method name - redirects to public method for backward compatibility"""
+        return self.detect_german_content(content)
+    
+    def analyze_ui_context(self, jobs) -> UIContext:
+        """
+        Analyze document jobs to create intelligent UI context
+        
+        Args:
+            jobs: List of DocumentJob objects or similar structures
+            
+        Returns:
+            UIContext: Comprehensive context for UI automation
+        """
         
         logger.info(
             "Analyzing UI context",
             job_count=len(jobs),
-            german_jobs=sum(1 for job in jobs if job.is_german_compliance)
+            german_jobs=sum(1 for job in jobs if self._is_german_job(job))
         )
         
         # Detect scenario
@@ -291,7 +342,7 @@ class UIContextLayer:
         
         # Calculate portfolio insights
         portfolio_score = self._calculate_portfolio_score(jobs, document_types)
-        german_percentage = sum(1 for job in jobs if job.is_german_compliance) / len(jobs) * 100
+        german_percentage = sum(1 for job in jobs if self._is_german_job(job)) / len(jobs) * 100 if jobs else 0
         
         # Identify priority risks and quick wins
         priority_risks = self._identify_priority_risks(jobs, missing_types)
@@ -330,19 +381,44 @@ class UIContextLayer:
         
         return context
     
-    def _detect_scenario(self, jobs: List[DocumentJob]) -> tuple[AuditScenario, float]:
+    def _is_german_job(self, job) -> bool:
+        """Check if job is German compliance related - flexible for different job types"""
+        try:
+            # Try DocumentJob interface first
+            if hasattr(job, 'is_german_compliance'):
+                return job.is_german_compliance
+            
+            # Try content-based detection
+            if hasattr(job, 'content'):
+                return self.detect_german_content(job.content)
+            
+            # Try filename-based detection
+            if hasattr(job, 'filename'):
+                return self._detect_german_from_filename(job.filename)
+            
+            return False
+            
+        except Exception:
+            return False
+    
+    def _detect_german_from_filename(self, filename: str) -> bool:
+        """Detect German content from filename"""
+        german_filename_indicators = [
+            'datenschutz', 'dsgvo', 'verfahrensverzeichnis', 'dsfa',
+            'sicherheit', 'richtlinie', 'verarbeitung', 'auftragsverarbeitung'
+        ]
+        
+        filename_lower = filename.lower()
+        return any(indicator in filename_lower for indicator in german_filename_indicators)
+    
+    def _detect_scenario(self, jobs) -> Tuple[AuditScenario, float]:
         """Detect the most likely compliance scenario"""
         
         scenario_scores = {scenario: 0.0 for scenario in AuditScenario}
         
         for job in jobs:
-            content_preview = ""
-            try:
-                content_preview = job.content.decode('utf-8', errors='ignore')[:1000].lower()
-            except:
-                pass
-            
-            filename_lower = job.filename.lower()
+            content_preview = self._get_job_content_preview(job)
+            filename_lower = self._get_job_filename(job).lower()
             all_text = content_preview + " " + filename_lower
             
             # Score each scenario based on pattern matches
@@ -350,11 +426,11 @@ class UIContextLayer:
                 for pattern in patterns:
                     if pattern in all_text:
                         scenario_scores[scenario] += 1.0
-                        if job.is_german_compliance:
+                        if self._is_german_job(job):
                             scenario_scores[scenario] += 0.5  # Bonus for German docs
         
         # Special scenario detection logic
-        doc_types = [indicator for job in jobs for indicator in job.compliance_indicators]
+        doc_types = self._get_all_compliance_indicators(jobs)
         
         # Audit preparation: comprehensive document set
         if len(set(doc_types)) >= 4:
@@ -370,23 +446,18 @@ class UIContextLayer:
             return AuditScenario.UNKNOWN, 0.0
         
         best_scenario = max(scenario_scores.items(), key=lambda x: x[1])
-        confidence = min(1.0, best_scenario[1] / len(jobs))
+        confidence = min(1.0, best_scenario[1] / len(jobs)) if jobs else 0.0
         
         return best_scenario[0], confidence
     
-    def _detect_industry(self, jobs: List[DocumentJob]) -> tuple[IndustryType, float]:
+    def _detect_industry(self, jobs) -> Tuple[IndustryType, float]:
         """Detect industry type from document content"""
         
         industry_scores = {industry: 0.0 for industry in IndustryType}
         
         for job in jobs:
-            content_preview = ""
-            try:
-                content_preview = job.content.decode('utf-8', errors='ignore')[:1000].lower()
-            except:
-                pass
-            
-            filename_lower = job.filename.lower()
+            content_preview = self._get_job_content_preview(job)
+            filename_lower = self._get_job_filename(job).lower()
             all_text = content_preview + " " + filename_lower
             
             # Score industries based on pattern matches
@@ -394,7 +465,7 @@ class UIContextLayer:
                 for pattern in patterns:
                     if pattern in all_text:
                         industry_scores[industry] += 1.0
-                        if job.is_german_compliance:
+                        if self._is_german_job(job):
                             industry_scores[industry] += 0.3
         
         # Find highest scoring industry
@@ -402,11 +473,11 @@ class UIContextLayer:
             return IndustryType.UNKNOWN, 0.0
         
         best_industry = max(industry_scores.items(), key=lambda x: x[1])
-        confidence = min(1.0, best_industry[1] / max(1, len(jobs) * 0.5))
+        confidence = min(1.0, best_industry[1] / max(1, len(jobs) * 0.5)) if jobs else 0.0
         
         return best_industry[0], confidence
     
-    def _detect_german_authority(self, jobs: List[DocumentJob], industry: IndustryType) -> GermanAuthority:
+    def _detect_german_authority(self, jobs, industry: IndustryType) -> GermanAuthority:
         """Detect relevant German data protection authority"""
         
         authority_scores = {authority: 0.0 for authority in GermanAuthority}
@@ -426,269 +497,68 @@ class UIContextLayer:
         
         # Content-based authority detection
         for job in jobs:
-            content_preview = ""
-            try:
-                content_preview = job.content.decode('utf-8', errors='ignore')[:1000].lower()
-            except:
-                pass
-            
-            all_text = content_preview + " " + job.filename.lower()
+            content_preview = self._get_job_content_preview(job)
+            filename_lower = self._get_job_filename(job).lower()
+            all_text = content_preview + " " + filename_lower
             
             for authority, patterns in self.authority_patterns.items():
                 for pattern in patterns:
                     if pattern in all_text:
                         authority_scores[authority] += 1.0
         
-        # Return highest scoring authority or unknown
+        # Find highest scoring authority
         if not any(authority_scores.values()):
             return GermanAuthority.UNKNOWN
         
-        return max(authority_scores.items(), key=lambda x: x[1])[0]
+        best_authority = max(authority_scores.items(), key=lambda x: x[1])
+        return best_authority[0]
     
-    def _analyze_document_types(self, jobs: List[DocumentJob]) -> List[str]:
-        """Analyze and categorize document types in portfolio"""
-        
-        detected_types = set()
-        
+    def _get_job_content_preview(self, job) -> str:
+        """Get content preview from job - flexible for different job types"""
+        try:
+            if hasattr(job, 'content'):
+                content = job.content
+                if isinstance(content, bytes):
+                    return content.decode('utf-8', errors='ignore')[:1000].lower()
+                elif isinstance(content, str):
+                    return content[:1000].lower()
+            return ""
+        except Exception:
+            return ""
+    
+    def _get_job_filename(self, job) -> str:
+        """Get filename from job - flexible for different job types"""
+        try:
+            if hasattr(job, 'filename'):
+                return job.filename
+            return ""
+        except Exception:
+            return ""
+    
+    def _get_all_compliance_indicators(self, jobs) -> List[str]:
+        """Get all compliance indicators from jobs"""
+        indicators = []
         for job in jobs:
-            # Use compliance indicators from job analysis
-            for indicator in job.compliance_indicators:
-                detected_types.add(indicator)
-            
-            # Additional content analysis
-            content_preview = ""
-            try:
-                content_preview = job.content.decode('utf-8', errors='ignore')[:1000].lower()
-            except:
-                pass
-            
-            filename_lower = job.filename.lower()
-            all_text = content_preview + " " + filename_lower
-            
-            # Check document type patterns
-            for doc_type, patterns in self.document_patterns.items():
-                if any(pattern in all_text for pattern in patterns):
-                    detected_types.add(doc_type)
-        
-        return list(detected_types)
+            if hasattr(job, 'compliance_indicators'):
+                indicators.extend(job.compliance_indicators)
+            else:
+                # Fallback: detect from filename
+                filename = self._get_job_filename(job)
+                for doc_type, patterns in self.document_patterns.items():
+                    if any(pattern in filename.lower() for pattern in patterns):
+                        indicators.append(doc_type)
+        return indicators
     
-    def _assess_completeness(self, document_types: List[str], scenario: AuditScenario) -> tuple[float, List[str]]:
-        """Assess compliance completeness and identify missing document types"""
+    def _analyze_document_types(self, jobs) -> List[str]:
+        """Analyze what document types are present"""
+        return self._get_all_compliance_indicators(jobs)
+    
+    def _assess_completeness(self, document_types: List[str], scenario: AuditScenario) -> Tuple[float, List[str]]:
+        """Assess compliance completeness and identify missing documents"""
         
-        # Required documents by scenario
         required_docs = {
-            AuditScenario.AUDIT_PREPARATION: [
-                'privacy_policy', 'ropa', 'dsfa', 'consent_form',
-                'contract', 'training_material'
-            ],
-            AuditScenario.NEW_SERVICE_LAUNCH: [
-                'privacy_policy', 'dsfa', 'consent_form'
-            ],
-            AuditScenario.INCIDENT_RESPONSE: [
-                'breach_response', 'privacy_policy', 'contract'
-            ],
-            AuditScenario.POLICY_REVIEW: [
-                'privacy_policy', 'training_material'
-            ],
-            AuditScenario.VENDOR_ASSESSMENT: [
-                'contract', 'ropa', 'dsfa'
-            ]
-        }
-        
-        scenario_requirements = required_docs.get(scenario, ['privacy_policy', 'ropa'])
-        
-        # Calculate completeness
-        found_requirements = sum(1 for req in scenario_requirements if req in document_types)
-        completeness = found_requirements / len(scenario_requirements) if scenario_requirements else 1.0
-        
-        # Identify missing types
-        missing_types = [req for req in scenario_requirements if req not in document_types]
-        
-        return completeness, missing_types
-    
-    def _generate_smart_actions(
-        self,
-        scenario: AuditScenario,
-        document_types: List[str],
-        missing_types: List[str],
-        industry: IndustryType
-    ) -> List[SmartAction]:
-        """Generate smart action suggestions based on context"""
-        
-        actions = []
-        
-        # Generate missing document actions
-        for missing_type in missing_types[:3]:  # Top 3 missing
-            action = self._create_document_generation_action(missing_type, industry)
-            if action:
-                actions.append(action)
-        
-        # Scenario-specific actions
-        if scenario == AuditScenario.AUDIT_PREPARATION:
-            actions.append(SmartAction(
-                action_id="export_audit_bundle",
-                label="Export Audit-Ready Bundle",
-                description="Generate comprehensive audit documentation package",
-                priority="high",
-                category="export",
-                endpoint="/api/v2/export/audit-bundle",
-                estimated_time=60
-            ))
-        
-        # Industry-specific actions
-        if industry == IndustryType.AUTOMOTIVE:
-            actions.append(SmartAction(
-                action_id="generate_vehicle_data_policy",
-                label="Generate Vehicle Data Policy",
-                description="Create automotive-specific data processing policy",
-                priority="medium",
-                category="generate",
-                endpoint="/api/v2/generate/automotive-policy",
-                estimated_time=120
-            ))
-        
-        # German compliance actions
-        if any('german' in doc_type for doc_type in document_types):
-            actions.append(SmartAction(
-                action_id="german_authority_check",
-                label="German Authority Compliance Check",
-                description="Verify compliance with German data protection authorities",
-                priority="high",
-                category="analyze",
-                endpoint="/api/v2/analyze/german-authority",
-                estimated_time=90
-            ))
-        
-        # Always offer portfolio analysis
-        actions.append(SmartAction(
-            action_id="portfolio_gap_analysis",
-            label="Complete Portfolio Gap Analysis",
-            description="Identify all compliance gaps across document portfolio",
-            priority="medium",
-            category="analyze",
-            endpoint="/api/v2/analyze/portfolio-gaps",
-            estimated_time=180
-        ))
-        
-        return actions[:5]  # Limit to top 5 actions
-    
-    def _create_document_generation_action(self, doc_type: str, industry: IndustryType) -> Optional[SmartAction]:
-        """Create document generation action for missing document type"""
-        
-        action_map = {
-            'privacy_policy': {
-                'label': 'Generate Privacy Policy',
-                'description': 'Create GDPR-compliant privacy policy template',
-                'endpoint': '/api/v2/generate/privacy-policy'
-            },
-            'dsfa': {
-                'label': 'Generate DSFA Template',
-                'description': 'Create Data Protection Impact Assessment template',
-                'endpoint': '/api/v2/generate/dsfa'
-            },
-            'ropa': {
-                'label': 'Generate Records of Processing',
-                'description': 'Create Article 30 records of processing template',
-                'endpoint': '/api/v2/generate/ropa'
-            },
-            'consent_form': {
-                'label': 'Generate Consent Form',
-                'description': 'Create GDPR Article 7 compliant consent template',
-                'endpoint': '/api/v2/generate/consent-form'
-            }
-        }
-        
-        if doc_type not in action_map:
-            return None
-        
-        action_config = action_map[doc_type]
-        
-        return SmartAction(
-            action_id=f"generate_{doc_type}",
-            label=action_config['label'],
-            description=action_config['description'],
-            priority="high",
-            category="generate",
-            endpoint=action_config['endpoint'],
-            parameters={"industry": industry.value},
-            estimated_time=90
-        )
-    
-    def _calculate_portfolio_score(self, jobs: List[DocumentJob], document_types: List[str]) -> float:
-        """Calculate overall portfolio compliance score"""
-        
-        base_score = 0.5
-        
-        # Bonus for document diversity
-        if len(document_types) >= 4:
-            base_score += 0.2
-        
-        # Bonus for German compliance content
-        german_ratio = sum(1 for job in jobs if job.is_german_compliance) / len(jobs)
-        base_score += german_ratio * 0.2
-        
-        # Bonus for high-priority documents
-        priority_indicators = ['dsfa', 'ropa', 'privacy_policy']
-        priority_found = sum(1 for indicator in priority_indicators if indicator in document_types)
-        base_score += (priority_found / len(priority_indicators)) * 0.1
-        
-        return min(1.0, base_score)
-    
-    def _identify_priority_risks(self, jobs: List[DocumentJob], missing_types: List[str]) -> List[str]:
-        """Identify priority compliance risks"""
-        
-        risks = []
-        
-        # Missing critical documents
-        critical_docs = ['dsfa', 'ropa', 'privacy_policy']
-        for doc in critical_docs:
-            if doc in missing_types:
-                risks.append(f"Missing {doc.replace('_', ' ').title()}")
-        
-        # German compliance risks
-        german_jobs = [job for job in jobs if job.is_german_compliance]
-        if german_jobs and len(german_jobs) / len(jobs) > 0.5:
-            if 'dsfa' in missing_types:
-                risks.append("German DSFA required for high-risk processing")
-        
-        return risks[:5]  # Top 5 risks
-    
-    def _identify_quick_wins(self, jobs: List[DocumentJob], document_types: List[str]) -> List[str]:
-        """Identify quick compliance wins"""
-        
-        quick_wins = []
-        
-        # Document organization
-        if len(jobs) > 3:
-            quick_wins.append("Organize documents by compliance category")
-        
-        # German content optimization
-        german_count = sum(1 for job in jobs if job.is_german_compliance)
-        if german_count > 0:
-            quick_wins.append("Optimize German legal terminology")
-        
-        # Template usage
-        if 'privacy_policy' in document_types:
-            quick_wins.append("Standardize privacy policy language")
-        
-        return quick_wins[:3]  # Top 3 quick wins
-    
-    def _generate_scenario_description(
-        self,
-        scenario: AuditScenario,
-        industry: IndustryType,
-        doc_count: int
-    ) -> str:
-        """Generate human-readable scenario description"""
-        
-        descriptions = {
-            AuditScenario.AUDIT_PREPARATION: f"Detected audit preparation scenario for {industry.value} industry with {doc_count} documents. Focus on comprehensive compliance documentation.",
-            AuditScenario.NEW_SERVICE_LAUNCH: f"New service launch detected in {industry.value} sector. Ensure privacy-by-design compliance before go-live.",
-            AuditScenario.INCIDENT_RESPONSE: f"Incident response scenario identified. Review breach procedures and notification requirements.",
-            AuditScenario.POLICY_REVIEW: f"Policy review and update process detected. Ensure current legal requirements are addressed.",
-            AuditScenario.VENDOR_ASSESSMENT: f"Third-party vendor assessment scenario. Focus on data processing agreements and due diligence.",
-            AuditScenario.COMPLIANCE_GAP_ANALYSIS: f"Comprehensive compliance gap analysis for {industry.value} organization.",
-            AuditScenario.UNKNOWN: f"General compliance analysis for {doc_count} documents in {industry.value} sector."
-        }
-        
-        return descriptions.get(scenario, f"Compliance analysis for {doc_count} documents.")
+            AuditScenario.AUDIT_PREPARATION: ['privacy_policy', 'ropa', 'dsfa', 'contract'],
+            AuditScenario.NEW_SERVICE_LAUNCH: ['privacy_policy', 'dsfa', 'consent_form'],
+            AuditScenario.INCIDENT_RESPONSE: ['breach_response', 'privacy_policy'],
+            AuditScenario.POLICY_REVIEW: ['privacy_policy', 'contract'],
+            AuditScenario.VENDOR_ASSESSMENT: ['contract

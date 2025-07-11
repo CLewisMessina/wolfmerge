@@ -14,9 +14,9 @@ from app.services.enhanced_compliance_analyzer import EnhancedComplianceAnalyzer
 from app.database import get_db_session, DEMO_WORKSPACE_ID, DEMO_ADMIN_USER_ID
 from app.config import settings
 
-# Day 3 Parallel Processing Imports
+# Day 3 Parallel Processing Imports - FIXED: Added missing DocumentJob import
 from app.services.parallel_processing import (
-    JobQueue, BatchProcessor, UIContextLayer, PerformanceMonitor
+    JobQueue, BatchProcessor, UIContextLayer, PerformanceMonitor, DocumentJob
 )
 from app.services.websocket.progress_handler import progress_handler
 
@@ -120,7 +120,7 @@ async def analyze_compliance_with_enterprise_features(
         )
     
     try:
-        # Process and validate files
+        # Process and validate files - FIXED: Removed file.size check, using content length
         processed_files = []
         total_size = 0
         
@@ -132,14 +132,16 @@ async def analyze_compliance_with_enterprise_features(
                            f"Allowed: {', '.join(settings.allowed_extensions)}"
                 )
             
-            if file.size and file.size > settings.max_file_size_bytes:
+            # FIXED: Read content first, then check size
+            content = await file.read()
+            file_size = len(content)
+            
+            if file_size > settings.max_file_size_bytes:
                 raise HTTPException(
                     status_code=413,
                     detail=f"File {file.filename} exceeds maximum size of {settings.max_file_size_mb}MB"
                 )
             
-            content = await file.read()
-            file_size = len(content)
             total_size += file_size
             processed_files.append((file.filename, content, file_size))
         
@@ -164,14 +166,14 @@ async def analyze_compliance_with_enterprise_features(
         # Initialize UI Context Layer for content detection
         ui_context_layer = UIContextLayer()
         
-        # German content detection
+        # FIXED: German content detection using public method
         authority_ctx.german_content_detected = any(
-            ui_context_layer._detect_german_content(content) 
+            ui_context_layer.detect_german_content(content) 
             for _, content, _ in processed_files
         )
         
-        # Only activate Big 4 Authority Engine for German GDPR content
-        if authority_ctx.german_content_detected and str(compliance_framework).lower() == 'gdpr':
+        # FIXED: Only activate Big 4 Authority Engine for German GDPR content
+        if authority_ctx.german_content_detected and compliance_framework.value == 'gdpr':
             try:
                 logger.info("🔍 Big 4 German Authority Engine: Activating for German GDPR content")
                 
@@ -238,18 +240,18 @@ async def analyze_compliance_with_enterprise_features(
                 "is_german_compliance": authority_ctx.german_content_detected
             }
             
-            # Create job object
+            # FIXED: Create job object with proper parameters
             job = DocumentJob(
                 job_id=job_data["job_id"],
-                workspace_id=workspace_id,
-                user_id=user_id,
                 filename=filename,
                 content=content,
                 size=size,
-                framework=compliance_framework,
-                priority=job_data["priority"],
-                is_german_compliance=authority_ctx.german_content_detected,
-                authority_context=authority_ctx
+                priority=job_queue.JobPriority.HIGH if authority_ctx.german_content_detected else job_queue.JobPriority.NORMAL,
+                complexity_score=0.5,  # Default complexity
+                processing_estimate_seconds=10.0,  # Default estimate
+                german_score=0.8 if authority_ctx.german_content_detected else 0.1,
+                language_detected="de" if authority_ctx.german_content_detected else "en",
+                compliance_indicators=["gdpr"] if compliance_framework.value == "gdpr" else [compliance_framework.value]
             )
             jobs.append(job)
         
@@ -498,6 +500,8 @@ async def _optimized_authority_detection(
     
     return context
 
+# enhanced_compliance.py - Part 2: Big 4 German Authority Endpoints and Helper Functions
+
 # =============================================================================
 # BIG 4 GERMAN AUTHORITY ENDPOINTS - Added for Enhanced Authority Analysis
 # =============================================================================
@@ -565,7 +569,7 @@ async def analyze_authority_specific(
 @router.post("/compare-authorities")
 async def compare_authority_compliance(
     files: List[UploadFile] = File(...),
-    authorities: List[str] = Form(...),
+    authorities: str = Form(...),  # FIXED: Changed from List[str] to str to handle form data properly
     industry: Optional[str] = Form(None),
     company_size: Optional[str] = Form(None),
     workspace_id: str = Form(default=DEMO_WORKSPACE_ID),
@@ -583,9 +587,23 @@ async def compare_authority_compliance(
     - Cost-benefit analysis for compliance strategies
     - Implementation roadmap for optimal compliance
     """
+    # FIXED: Parse comma-separated authorities string into list
+    try:
+        authorities_list = [auth.strip() for auth in authorities.split(',') if auth.strip()]
+        if len(authorities_list) < 2:
+            raise HTTPException(
+                status_code=400,
+                detail="At least 2 valid authority IDs required for comparison"
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid authorities format. Use comma-separated list (e.g., 'bfdi,baylda'): {str(e)}"
+        )
+    
     return await big4_endpoints.compare_authorities(
         files=files,
-        authorities=authorities,
+        authorities=authorities_list,
         industry=industry,
         company_size=company_size,
         workspace_id=workspace_id,

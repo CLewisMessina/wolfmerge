@@ -1,4 +1,4 @@
-# app/config.py - Railway-Optimized for Your Environment
+# app/config.py - Railway-Optimized with Authority Engine Support
 import os
 from typing import List, Optional
 from pydantic_settings import BaseSettings
@@ -44,9 +44,14 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
     
-    # File Processing
+    # File Processing - ENHANCED for Authority Engine Support
     max_file_size_mb: int = 50
     max_files_per_batch: int = 10
+    
+    # NEW: Missing properties for authority endpoints
+    max_total_file_size_mb: int = 200  # Total batch size limit
+    max_total_file_size: int = 200 * 1024 * 1024  # 200MB in bytes
+    
     allowed_extensions: List[str] = [".txt", ".md", ".pdf", ".docx", ".doc"]
     
     # GDPR Compliance
@@ -64,6 +69,11 @@ class Settings(BaseSettings):
     german_legal_frameworks: List[str] = ["gdpr", "dsgvo", "bdsg"]
     default_language: str = "de"
     supported_languages: List[str] = ["de", "en"]
+    
+    # Authority Engine Configuration - NEW
+    big4_authority_engine_enabled: bool = True
+    authority_detection_threshold: float = 0.5  # Minimum confidence for authority detection
+    german_authority_priority_boost: float = 0.3  # Priority boost for German content
     
     # CORS Configuration
     cors_origins: List[str] = [
@@ -91,13 +101,28 @@ class Settings(BaseSettings):
     
     @property
     def max_file_size_bytes(self) -> int:
-        """Convert MB to bytes"""
+        """Convert MB to bytes for individual file limit"""
         return self.max_file_size_mb * 1024 * 1024
+    
+    @property
+    def max_workspace_size_bytes(self) -> int:
+        """Convert workspace size MB to bytes"""
+        return self.max_workspace_size_mb * 1024 * 1024
+    
+    @property
+    def max_total_file_size_bytes(self) -> int:
+        """Convert total batch size MB to bytes - FIXED: Now uses the correct property"""
+        return self.max_total_file_size_mb * 1024 * 1024
     
     @property
     def is_production(self) -> bool:
         """Check if running in production"""
         return self.environment.lower() == "production"
+    
+    @property
+    def is_development(self) -> bool:
+        """Check if running in development"""
+        return self.environment.lower() in ["development", "dev", "local"]
 
 # Safe instantiation with Railway debugging
 try:
@@ -106,6 +131,8 @@ try:
     print(f"✅ Database URL format: {settings.database_url[:20]}...")
     print(f"✅ OpenAI API key loaded: {settings.openai_api_key[:10]}...")
     print(f"✅ Secret key loaded: {len(settings.secret_key)} characters")
+    print(f"✅ Authority Engine enabled: {settings.big4_authority_engine_enabled}")
+    print(f"✅ File limits - Individual: {settings.max_file_size_mb}MB, Batch: {settings.max_total_file_size_mb}MB, Workspace: {settings.max_workspace_size_mb}MB")
 except Exception as e:
     print(f"❌ Settings loading failed: {e}")
     
