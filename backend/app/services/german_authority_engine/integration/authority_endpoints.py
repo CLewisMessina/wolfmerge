@@ -793,7 +793,133 @@ class Big4AuthorityEndpoints:
             f"Primary recommendation: Choose {best_compliance[0]} for highest compliance alignment"
         )
         
-        # Find authority with lowest enforcement risk
+# Find authority with lowest enforcement risk
         lowest_enforcement = min(analyses.items(), key=lambda x: x[1]["enforcement_likelihood"])
         recommendations.append(
-            f"
+            f"Risk mitigation: {lowest_enforcement[0]} shows lowest enforcement likelihood"
+        )
+        
+        # Industry-specific recommendations
+        if industry:
+            industry_specific = {
+                "automotive": "Consider BayLDA for automotive industry expertise",
+                "software": "LfD BW offers specialized software compliance guidance",
+                "manufacturing": "LDI NRW has strong manufacturing sector focus",
+                "technology": "LfD BW provides technology-focused compliance support"
+            }
+            
+            if industry in industry_specific:
+                recommendations.append(industry_specific[industry])
+        
+        # General strategic advice
+        recommendations.extend([
+            "Consider establishing relationships with multiple authorities for comprehensive coverage",
+            "Implement compliance measures that satisfy the most stringent requirements",
+            "Regular compliance audits can improve scores across all jurisdictions"
+        ])
+        
+        return recommendations[:5]  # Limit to top 5 recommendations
+    
+    def _get_authority_customizations(self, authority: str, industry: str) -> Dict[str, Any]:
+        """Get authority-specific template customizations"""
+        
+        customizations = {
+            "bfdi": {
+                "focus_areas": ["International data transfers", "Cross-border processing"],
+                "additional_documents": ["Transfer Impact Assessment", "Adequacy Decision Review"],
+                "specific_clauses": [
+                    "International transfer safeguards",
+                    "Cross-border processing notifications",
+                    "Federal compliance reporting"
+                ]
+            },
+            "baylda": {
+                "focus_areas": ["Automotive compliance", "Connected vehicle data"],
+                "additional_documents": ["Vehicle Data Processing Notice", "Supplier Data Agreement"],
+                "specific_clauses": [
+                    "Automotive telematics compliance",
+                    "Connected service data protection",
+                    "Supplier chain data agreements"
+                ]
+            },
+            "lfd_bw": {
+                "focus_areas": ["Privacy by design", "Software compliance"],
+                "additional_documents": ["Privacy by Design Documentation", "API Privacy Terms"],
+                "specific_clauses": [
+                    "Software privacy by design",
+                    "API data processing transparency",
+                    "Technology compliance frameworks"
+                ]
+            },
+            "ldi_nrw": {
+                "focus_areas": ["Manufacturing compliance", "Employee data"],
+                "additional_documents": ["Employee Data Policy", "Manufacturing Data Notice"],
+                "specific_clauses": [
+                    "Manufacturing data protection",
+                    "Employee monitoring compliance",
+                    "Industrial data processing"
+                ]
+            }
+        }
+        
+        base_customization = customizations.get(authority, {})
+        
+        # Add industry-specific elements
+        if industry == "automotive" and authority == "baylda":
+            base_customization["priority_requirements"] = [
+                "Connected vehicle consent mechanisms",
+                "Automotive supplier data agreements",
+                "Vehicle telematics privacy notices"
+            ]
+        elif industry == "software" and authority == "lfd_bw":
+            base_customization["priority_requirements"] = [
+                "Privacy by design implementation",
+                "API data processing documentation",
+                "User consent management systems"
+            ]
+        
+        return base_customization
+
+# Integration helper functions for enhanced_compliance.py
+def create_big4_authority_endpoints() -> Big4AuthorityEndpoints:
+    """Factory function to create Big 4 Authority Endpoints instance"""
+    return Big4AuthorityEndpoints()
+
+def get_big4_endpoint_routes():
+    """
+    Get route configuration for adding Big 4 endpoints to enhanced_compliance.py
+    
+    Returns dictionary with route definitions that can be added to FastAPI router.
+    """
+    return {
+        "analyze_with_authority_detection": {
+            "path": "/analyze-with-authority-detection",
+            "method": "POST",
+            "description": "Smart Authority Detection + Analysis"
+        },
+        "analyze_authority_specific": {
+            "path": "/analyze-authority/{authority_id}",
+            "method": "POST", 
+            "description": "Authority-Specific Compliance Analysis"
+        },
+        "compare_authorities": {
+            "path": "/compare-authorities",
+            "method": "POST",
+            "description": "Multi-Authority Compliance Comparison"
+        },
+        "detect_from_business": {
+            "path": "/authorities/detect-from-business",
+            "method": "GET",
+            "description": "Business Profile Authority Detection"
+        },
+        "industry_templates": {
+            "path": "/templates/industry/{industry}",
+            "method": "GET",
+            "description": "Industry-Specific Compliance Templates"
+        },
+        "big4_info": {
+            "path": "/authorities/big4",
+            "method": "GET",
+            "description": "Big 4 German Authorities Information"
+        }
+    }
