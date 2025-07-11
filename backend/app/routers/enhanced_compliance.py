@@ -340,6 +340,11 @@ async def analyze_compliance_with_enterprise_features(
             performance_monitor, processing_results, params, processing_time, start_time, batches
         )
         
+        # Calculate safe success rate
+        total_results = len(processing_results)
+        successful_results = len([r for r in processing_results if r.success])
+        success_rate = successful_results / total_results if total_results else 0.0
+
         # Notify frontend of completion with authority data
         try:
             await progress_handler.handle_batch_completed(workspace_id, {
@@ -347,7 +352,7 @@ async def analyze_compliance_with_enterprise_features(
                 "processing_time": processing_time,
                 "compliance_score": compliance_report.compliance_score,
                 "german_documents_detected": compliance_report.german_documents_detected,
-                "success_rate": len([r for r in processing_results if r.success]) / len(processing_results),
+                "success_rate": success_rate,
                 "performance_grade": _calculate_performance_grade(processing_results),
                 "ui_context": ui_context.to_dict(),
                 "authority_intelligence": authority_ctx.to_metadata_dict()
