@@ -1,8 +1,12 @@
-# app/config.py - Railway-Optimized with Authority Engine Support
+# app/config.py - Railway-Optimized with Authority Engine Support - FIXED VERSION
 import os
 from typing import List, Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field
+import structlog
+
+# Initialize logger for this module
+logger = structlog.get_logger()
 
 class Settings(BaseSettings):
     # OpenAI Configuration
@@ -48,9 +52,9 @@ class Settings(BaseSettings):
     max_file_size_mb: int = 50
     max_files_per_batch: int = 10
     
-    # NEW: Missing properties for authority endpoints
-    max_total_file_size_mb: int = 200  # Total batch size limit
-    max_total_file_size: int = 200 * 1024 * 1024  # 200MB in bytes
+    # FIXED: Missing properties that caused the API errors
+    max_total_file_size_mb: int = 200  # Total batch size limit in MB
+    max_total_file_size: int = 200 * 1024 * 1024  # Total batch size limit in bytes
     
     allowed_extensions: List[str] = [".txt", ".md", ".pdf", ".docx", ".doc"]
     
@@ -101,7 +105,7 @@ class Settings(BaseSettings):
     
     @property
     def max_file_size_bytes(self) -> int:
-        """Convert MB to bytes for individual file limit"""
+        """Convert individual file size MB to bytes"""
         return self.max_file_size_mb * 1024 * 1024
     
     @property
@@ -111,7 +115,7 @@ class Settings(BaseSettings):
     
     @property
     def max_total_file_size_bytes(self) -> int:
-        """Convert total batch size MB to bytes - FIXED: Now uses the correct property"""
+        """Convert total batch size MB to bytes - FIXED: Uses the correct property"""
         return self.max_total_file_size_mb * 1024 * 1024
     
     @property
@@ -124,38 +128,55 @@ class Settings(BaseSettings):
         """Check if running in development"""
         return self.environment.lower() in ["development", "dev", "local"]
 
-# Safe instantiation with Railway debugging
+# Safe instantiation with Railway debugging - IMPROVED: Better logging practices
 try:
     settings = Settings()
-    print(f"✅ Settings loaded successfully for environment: {settings.environment}")
-    print(f"✅ Database URL format: {settings.database_url[:20]}...")
-    print(f"✅ OpenAI API key loaded: {settings.openai_api_key[:10]}...")
-    print(f"✅ Secret key loaded: {len(settings.secret_key)} characters")
-    print(f"✅ Authority Engine enabled: {settings.big4_authority_engine_enabled}")
-    print(f"✅ File limits - Individual: {settings.max_file_size_mb}MB, Batch: {settings.max_total_file_size_mb}MB, Workspace: {settings.max_workspace_size_mb}MB")
-except Exception as e:
-    print(f"❌ Settings loading failed: {e}")
     
-    # Debug Railway environment variables
-    print("\n🔍 Railway Environment Debug:")
+    # FIXED: Improved logging to avoid exposing sensitive information
+    logger.info("Settings loaded successfully", 
+                environment=settings.environment,
+                database_connection="configured",
+                openai_configured=bool(settings.openai_api_key),
+                secret_key_configured=bool(settings.secret_key))
+    
+    logger.info("Authority Engine configuration",
+                big4_enabled=settings.big4_authority_engine_enabled,
+                detection_threshold=settings.authority_detection_threshold)
+    
+    logger.info("File processing limits",
+                individual_file_mb=settings.max_file_size_mb,
+                batch_total_mb=settings.max_total_file_size_mb,
+                workspace_mb=settings.max_workspace_size_mb,
+                max_files_per_batch=settings.max_files_per_batch)
+    
+except Exception as e:
+    logger.error("Settings loading failed", error=str(e))
+    
+    # Debug Railway environment variables - IMPROVED: More secure logging
+    logger.info("Checking environment configuration...")
+    
     relevant_vars = ['DATABASE_URL', 'OPENAI_API_KEY', 'SECRET_KEY', 'ENVIRONMENT', 'DEBUG']
     for var in relevant_vars:
         value = os.environ.get(var)
         if value:
-            if 'KEY' in var:
-                print(f"  {var}: {value[:10]}... ({len(value)} chars)")
+            if 'KEY' in var or 'SECRET' in var:
+                logger.debug(f"{var}: configured ({len(value)} characters)")
             else:
-                print(f"  {var}: {value}")
+                logger.debug(f"{var}: {value}")
         else:
-            print(f"  {var}: ❌ NOT SET")
+            logger.warning(f"{var}: NOT SET")
     
-    print(f"\n📋 All environment variables starting with relevant prefixes:")
-    for key in sorted(os.environ.keys()):
-        if any(prefix in key.upper() for prefix in ['DATABASE', 'OPENAI', 'SECRET', 'API', 'DEBUG']):
-            value = os.environ[key]
-            if 'KEY' in key or 'SECRET' in key:
-                print(f"  {key}: {value[:10]}... ({len(value)} chars)")
-            else:
-                print(f"  {key}: {value}")
+    # Log Railway-specific environment variables (without sensitive data)
+    railway_vars = [key for key in os.environ.keys() 
+                   if any(prefix in key.upper() for prefix in ['RAILWAY', 'DATABASE', 'API']) 
+                   and 'KEY' not in key and 'SECRET' not in key]
+    
+    if railway_vars:
+        logger.info("Railway environment variables detected", 
+                   variable_count=len(railway_vars),
+                   variables=railway_vars[:5])  # Only show first 5 for brevity
     
     raise
+
+# Export settings instance
+__all__ = ["settings"]

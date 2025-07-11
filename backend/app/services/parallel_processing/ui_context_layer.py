@@ -1,4 +1,4 @@
-# app/services/parallel_processing/ui_context_layer.py
+# app/services/parallel_processing/ui_context_layer.py - FIXED: Complete Implementation
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple
 from enum import Enum
@@ -119,14 +119,9 @@ class UIContextLayer:
     """Intelligent UI context detection for zero-friction compliance analysis"""
     
     def __init__(self):
-        # Import DocumentJob here to avoid circular imports
-        try:
-            from .job_queue import DocumentJob
-            self.DocumentJob = DocumentJob
-        except ImportError:
-            # Fallback for cases where job_queue isn't available
-            self.DocumentJob = None
-            logger.warning("DocumentJob not available - some features may be limited")
+        # IMPROVED: Better import handling with fallback
+        self.DocumentJob = None
+        self._initialize_document_job()
         
         # Document type patterns for detection
         self.document_patterns = {
@@ -239,7 +234,19 @@ class UIContextLayer:
             ]
         }
     
-    # FIXED: Make method public and add fallback for different content types
+    def _initialize_document_job(self):
+        """IMPROVED: Initialize DocumentJob with better error handling"""
+        try:
+            from .job_queue import DocumentJob
+            self.DocumentJob = DocumentJob
+            logger.debug("DocumentJob successfully imported")
+        except ImportError as e:
+            logger.warning(f"DocumentJob not available: {e} - Some features may be limited")
+            self.DocumentJob = None
+        except Exception as e:
+            logger.error(f"Unexpected error importing DocumentJob: {e}")
+            self.DocumentJob = None
+    
     def detect_german_content(self, content) -> bool:
         """
         Public method for German content detection - can handle bytes or str
@@ -300,7 +307,7 @@ class UIContextLayer:
         
         return german_count >= 2 or article_matches >= 1
     
-    # Legacy method for backward compatibility - FIXED
+    # Legacy method for backward compatibility
     def _detect_german_content(self, content) -> bool:
         """Legacy method name - redirects to public method for backward compatibility"""
         return self.detect_german_content(content)
@@ -556,9 +563,158 @@ class UIContextLayer:
     def _assess_completeness(self, document_types: List[str], scenario: AuditScenario) -> Tuple[float, List[str]]:
         """Assess compliance completeness and identify missing documents"""
         
+        # FIXED: Complete the required_docs dictionary properly
         required_docs = {
             AuditScenario.AUDIT_PREPARATION: ['privacy_policy', 'ropa', 'dsfa', 'contract'],
             AuditScenario.NEW_SERVICE_LAUNCH: ['privacy_policy', 'dsfa', 'consent_form'],
             AuditScenario.INCIDENT_RESPONSE: ['breach_response', 'privacy_policy'],
             AuditScenario.POLICY_REVIEW: ['privacy_policy', 'contract'],
-            AuditScenario.VENDOR_ASSESSMENT: ['contract
+            AuditScenario.VENDOR_ASSESSMENT: ['contract', 'vendor_assessment'],
+            AuditScenario.COMPLIANCE_GAP_ANALYSIS: ['privacy_policy', 'ropa', 'dsfa'],
+            AuditScenario.UNKNOWN: []
+        }
+        
+        required_for_scenario = required_docs.get(scenario, [])
+        present_types = set(document_types)
+        required_types = set(required_for_scenario)
+        
+        if not required_types:
+            return 0.8, []  # Default completeness for unknown scenarios
+        
+        missing_types = list(required_types - present_types)
+        completeness = len(present_types & required_types) / len(required_types)
+        
+        return completeness, missing_types
+    
+    def _generate_smart_actions(self, scenario: AuditScenario, document_types: List[str], 
+                               missing_types: List[str], industry: IndustryType) -> List[SmartAction]:
+        """Generate smart action suggestions based on context"""
+        
+        actions = []
+        
+        # Missing document actions
+        for missing_type in missing_types:
+            action = SmartAction(
+                action_id=f"generate_{missing_type}",
+                label=f"Generate {missing_type.replace('_', ' ').title()}",
+                description=f"Create a {missing_type.replace('_', ' ')} template for {industry.value} industry",
+                priority="high",
+                category="generate",
+                endpoint=f"/api/v2/templates/{missing_type}",
+                parameters={"industry": industry.value},
+                estimated_time=60
+            )
+            actions.append(action)
+        
+        # Scenario-specific actions
+        if scenario == AuditScenario.AUDIT_PREPARATION:
+            actions.append(SmartAction(
+                action_id="export_audit_report",
+                label="Export Audit Report",
+                description="Generate comprehensive audit preparation report",
+                priority="high",
+                category="export",
+                endpoint="/api/v2/reports/audit",
+                estimated_time=30
+            ))
+        
+        elif scenario == AuditScenario.INCIDENT_RESPONSE:
+            actions.append(SmartAction(
+                action_id="breach_notification_template",
+                label="Generate Breach Notification",
+                description="Create data breach notification templates",
+                priority="high",
+                category="generate",
+                endpoint="/api/v2/templates/breach_notification",
+                estimated_time=45
+            ))
+        
+        # Industry-specific actions
+        if industry == IndustryType.AUTOMOTIVE:
+            actions.append(SmartAction(
+                action_id="automotive_compliance_check",
+                label="Automotive Compliance Check",
+                description="Specialized automotive industry compliance analysis",
+                priority="medium",
+                category="analyze",
+                endpoint="/api/v2/industry/automotive/analyze",
+                estimated_time=90
+            ))
+        
+        return actions[:5]  # Limit to top 5 actions
+    
+    def _calculate_portfolio_score(self, jobs, document_types: List[str]) -> float:
+        """Calculate overall portfolio compliance score"""
+        
+        base_score = 0.3  # Base score for having documents
+        
+        # Bonus for document variety
+        variety_bonus = min(0.3, len(set(document_types)) * 0.05)
+        
+        # Bonus for German compliance
+        german_jobs = sum(1 for job in jobs if self._is_german_job(job))
+        german_bonus = min(0.2, (german_jobs / len(jobs)) * 0.2) if jobs else 0
+        
+        # Bonus for critical documents
+        critical_docs = ['privacy_policy', 'ropa', 'dsfa']
+        critical_bonus = sum(0.05 for doc in critical_docs if doc in document_types)
+        
+        return min(1.0, base_score + variety_bonus + german_bonus + critical_bonus)
+    
+    def _identify_priority_risks(self, jobs, missing_types: List[str]) -> List[str]:
+        """Identify priority compliance risks"""
+        
+        risks = []
+        
+        # Missing critical documents
+        critical_missing = {
+            'privacy_policy': "Missing Privacy Policy - Required for GDPR compliance",
+            'ropa': "Missing Records of Processing Activities - Article 30 GDPR violation risk",
+            'dsfa': "Missing Data Protection Impact Assessment - High-risk processing detected"
+        }
+        
+        for missing in missing_types:
+            if missing in critical_missing:
+                risks.append(critical_missing[missing])
+        
+        # Content-based risks
+        german_jobs = sum(1 for job in jobs if self._is_german_job(job))
+        if german_jobs > 0 and 'ropa' in missing_types:
+            risks.append("German content detected without proper ROPA documentation")
+        
+        return risks[:3]  # Top 3 risks
+    
+    def _identify_quick_wins(self, jobs, document_types: List[str]) -> List[str]:
+        """Identify quick compliance improvements"""
+        
+        wins = []
+        
+        if 'privacy_policy' in document_types:
+            wins.append("Privacy Policy detected - good foundation for compliance")
+        
+        if any(self._is_german_job(job) for job in jobs):
+            wins.append("German compliance content detected - leverage for EU market")
+        
+        if len(document_types) >= 3:
+            wins.append("Good document variety - comprehensive compliance approach")
+        
+        wins.append("Export compliance report for stakeholder review")
+        wins.append("Generate missing document templates to close gaps")
+        
+        return wins[:3]  # Top 3 quick wins
+    
+    def _generate_scenario_description(self, scenario: AuditScenario, 
+                                     industry: IndustryType, doc_count: int) -> str:
+        """Generate human-readable scenario description"""
+        
+        scenario_descriptions = {
+            AuditScenario.AUDIT_PREPARATION: f"Audit preparation detected for {industry.value} industry with {doc_count} documents",
+            AuditScenario.NEW_SERVICE_LAUNCH: f"New service launch compliance check for {industry.value} sector",
+            AuditScenario.INCIDENT_RESPONSE: f"Data incident response preparation in {industry.value} context",
+            AuditScenario.POLICY_REVIEW: f"Policy review and update process for {industry.value} organization",
+            AuditScenario.VENDOR_ASSESSMENT: f"Third-party vendor compliance assessment in {industry.value}",
+            AuditScenario.COMPLIANCE_GAP_ANALYSIS: f"Compliance gap analysis for {industry.value} operations",
+            AuditScenario.UNKNOWN: f"General compliance analysis for {industry.value} with {doc_count} documents"
+        }
+        
+        return scenario_descriptions.get(scenario, f"Compliance analysis for {industry.value} industry")
