@@ -1,4 +1,4 @@
-# app/main.py
+# app/main.py - Updated for Refactored Compliance Structure
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -13,10 +13,10 @@ from fastapi.responses import JSONResponse
 from openai import OpenAI
 
 from app.config import settings
-from app.routers import compliance  # Day 1 router (backward compatibility)
-from app.routers import enhanced_compliance  # Day 2 enterprise router
+# UPDATED: Import refactored compliance router instead of old ones
+from app.routers.compliance import compliance_router
 from app.database import create_tables, init_demo_data, health_check
-from app.utils.smart_docling import get_docling_status  # NEW: Added for Smart Docling check
+from app.utils.smart_docling import get_docling_status
 from app.services.websocket.manager import websocket_manager
 
 # Configure structured logging
@@ -42,10 +42,10 @@ logger = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan management for Day 2 enterprise features"""
+    """Application lifespan management for enterprise features"""
     
     # Startup
-    logger.info("Starting WolfMerge Enterprise Compliance Platform v2.0")
+    logger.info("Starting WolfMerge Enterprise Compliance Platform v2.0 - Refactored")
     
     try:
         # Initialize database tables
@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
         await create_tables()
         logger.info("Database tables created successfully")
         
-        # Initialize demo data for Day 2 testing
+        # Initialize demo data
         logger.info("Initializing demo data...")
         await init_demo_data()
         logger.info("Demo data initialized successfully")
@@ -64,182 +64,154 @@ async def lifespan(app: FastAPI):
             logger.info(
                 "Database health check passed",
                 tables_created=db_health.get("tables_created"),
-                demo_data_loaded=db_health.get("demo_data_loaded"),
-                eu_region=db_health.get("eu_region")
+                demo_data_loaded=db_health.get("demo_data_loaded")
             )
-        else:
-            logger.error("Database health check failed")
         
-        # Test OpenAI connectivity on startup
+        # Check Docling status
+        docling_status = get_docling_status()
+        logger.info(
+            "Docling status checked",
+            available=docling_status.get("docling_available"),
+            environment=docling_status.get("environment")
+        )
+        
+        # Verify OpenAI connection
         try:
             client = OpenAI(api_key=settings.openai_api_key)
-            logger.info("OpenAI client initialized successfully")
+            models = client.models.list()
+            logger.info("OpenAI connection verified successfully")
         except Exception as e:
-            logger.error("OpenAI initialization failed", error=str(e))
+            logger.warning(f"OpenAI connection check failed: {e}")
         
-        # Log startup completion - FIXED: Remove problematic kwargs
-        logger.info("WolfMerge Enterprise Platform started successfully")
+        # Log refactored compliance system status
+        logger.info(
+            "Refactored compliance system initialized",
+            max_file_size_mb=settings.max_file_size_mb,
+            max_files_per_batch=settings.max_files_per_batch,
+            authority_engine_enabled=settings.big4_authority_engine_enabled,
+            frameworks_supported=["gdpr", "soc2", "hipaa", "iso27001"]
+        )
+        
+        yield
         
     except Exception as e:
-        logger.error("Startup failed", error=str(e))
+        logger.error(f"Startup failed: {e}")
         raise
     
-    yield
-    
     # Shutdown
-    logger.info("Shutting down WolfMerge Enterprise Platform")
-    
-    try:
-        logger.info("Cleanup completed successfully")
-    except Exception as e:
-        logger.error("Shutdown cleanup failed", error=str(e))
+    logger.info("Shutting down WolfMerge Enterprise Compliance Platform")
 
-# Create FastAPI app with enhanced enterprise features
+# Create FastAPI app with lifespan management
 app = FastAPI(
-    title="WolfMerge Enterprise Compliance Platform",
-    version="2.0.0",
+    title=settings.api_title,
+    version=settings.api_version,
     description="""
-    AI-powered compliance analysis platform for German enterprises.
+    🐺 **WolfMerge Enterprise Compliance Platform v2.0 - Refactored Architecture**
     
-    **Day 2 Enterprise Features:**
-    - Docling intelligent document processing with semantic chunking
-    - Team workspace collaboration with PostgreSQL backend
-    - Advanced German DSGVO compliance analysis
-    - EU cloud deployment with GDPR-compliant audit trails
-    - Chunk-level compliance insights for detailed audit preparation
+    Advanced compliance analysis with German authority intelligence, powered by a clean, maintainable architecture.
     
-    **German Market Focus:**
-    - Native DSGVO terminology recognition and article mapping
-    - German supervisory authority compliance verification  
-    - Industry-specific templates for automotive, healthcare, manufacturing
-    - SME-focused workflows at enterprise-grade quality
+    ## 🏗️ **Refactored Architecture Benefits**
+    - **Modular Services**: Clean separation of concerns
+    - **Enhanced Debugging**: Isolated error handling per service  
+    - **Performance Monitoring**: Real-time analytics and optimization
+    - **Authority Intelligence**: German compliance specialization
+    - **Scalable Design**: Easy to extend and maintain
     
-    **API Versions:**
-    - `/api/compliance` - Day 1 basic analysis (backward compatible)
-    - `/api/v2/compliance` - Day 2 enterprise features with Docling intelligence
+    ## 🚀 **Core Features**
+    - **Multi-Framework Analysis**: GDPR/DSGVO, SOC 2, HIPAA, ISO 27001
+    - **German Authority Detection**: BfDI, BayLDA, LfD automatic identification
+    - **Parallel Processing**: Intelligent job queue with priority handling
+    - **Real-time Progress**: WebSocket updates during processing
+    - **Team Workspaces**: Collaborative compliance management
+    - **EU Cloud Deployment**: GDPR-compliant data residency
+    
+    ## 🏛️ **German Authority Intelligence**
+    - **BfDI**: Federal Commissioner (international transfers)
+    - **BayLDA**: Bavarian State Office (automotive focus)  
+    - **LfD BW**: Baden-Württemberg Commissioner (manufacturing)
+    - **Industry-Specific**: Automotive, healthcare, manufacturing
     """,
     lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc"
+    debug=settings.debug
 )
 
-# Security middleware for enterprise deployment
-app.add_middleware(
-    TrustedHostMiddleware, 
-    allowed_hosts=[
-        "localhost",
-        "127.0.0.1", 
-        "api.wolfmerge.com",
-        "dev-api.wolfmerge.com",
-        "*.railway.app"
-    ]
-)
-
-# Enhanced CORS middleware for enterprise deployment
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins + [
-        "https://app.wolfmerge.com",
-        "https://dev-app.wolfmerge.com",
-        "https://*.wolfmerge.com"
-    ],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Analysis-ID", "X-Workspace-ID", "X-Processing-Time"]
 )
 
-# Request logging middleware for audit trails
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    """Log all requests for audit trails and monitoring"""
-    
-    start_time = datetime.now(timezone.utc)
-    request_id = str(uuid.uuid4())
-    
-    # Log request start
-    logger.info(
-        "Request started",
-        request_id=request_id,
-        method=request.method,
-        url=str(request.url),
-        client_ip=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
-        content_length=request.headers.get("content-length")
+# Add trusted host middleware for security
+if settings.is_production:
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["*.wolfmerge.com", "*.railway.app", "localhost"]
     )
+
+# Global exception handler for better error responses
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler with request tracking"""
+    
+    request_id = str(uuid.uuid4())
+    processing_time = 0.0
     
     try:
-        response = await call_next(request)
+        # Calculate processing time if available
+        if hasattr(request.state, "start_time"):
+            processing_time = (datetime.now(timezone.utc) - request.state.start_time).total_seconds()
         
-        processing_time = (datetime.now(timezone.utc) - start_time).total_seconds()
-        
-        # Add processing time and request ID headers
-        response.headers["X-Processing-Time"] = str(processing_time)
-        response.headers["X-Request-ID"] = request_id
-        
-        # Log successful request
-        logger.info(
-            "Request completed",
-            request_id=request_id,
-            method=request.method,
-            url=str(request.url),
-            status_code=response.status_code,
-            processing_time=processing_time
-        )
-        
-        return response
-        
-    except Exception as e:
-        processing_time = (datetime.now(timezone.utc) - start_time).total_seconds()
-        
-        # Log failed request
+        # Log the error with context
         logger.error(
-            "Request failed",
+            "Global exception handler triggered",
             request_id=request_id,
             method=request.method,
             url=str(request.url),
-            error=str(e),
-            processing_time=processing_time
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+            processing_time=processing_time,
+            exc_info=True
         )
         
-        # Return structured error response
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "Internal server error",
-                "message": "Request processing failed",
-                "request_id": request_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "processing_time": processing_time
-            },
-            headers={
-                "X-Request-ID": request_id,
-                "X-Processing-Time": str(processing_time)
-            }
-        )
+    except Exception as logging_error:
+        logger.error(f"Failed to log exception: {logging_error}")
+    
+    # Return structured error response
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "message": "Request processing failed",
+            "request_id": request_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "processing_time": processing_time
+        },
+        headers={
+            "X-Request-ID": request_id,
+            "X-Processing-Time": str(processing_time)
+        }
+    )
 
-# Include API routers with backward compatibility
+# UPDATED: Include refactored compliance router
 app.include_router(
-    compliance.router, 
-    tags=["Day 1 - Basic Compliance (Backward Compatible)"]
-)
-
-app.include_router(
-    enhanced_compliance.router, 
-    tags=["Day 2 - Enterprise Features with Docling Intelligence"]
+    compliance_router,
+    tags=["Compliance Analysis - Refactored v2.0"]
 )
 
 @app.websocket("/ws/{workspace_id}")
 async def websocket_endpoint(websocket: WebSocket, workspace_id: str):
     """
-    Day 3: Real-time progress tracking WebSocket endpoint
+    Real-time progress tracking WebSocket endpoint
     
     Provides live updates for:
     - Document processing progress
     - Batch status updates
-    - UI context intelligence
     - Performance metrics
     - Error notifications
+    - Authority detection results
     """
     
     connection_id = None
@@ -260,375 +232,128 @@ async def websocket_endpoint(websocket: WebSocket, workspace_id: str):
                 # Wait for client messages (ping/pong, etc.)
                 data = await websocket.receive_text()
                 
-                # Handle client messages if needed
+                # Handle client messages
                 try:
                     message = json.loads(data)
-                    if message.get("type") == "ping":
+                    message_type = message.get("type")
+                    
+                    if message_type == "ping":
                         await websocket.send_text(json.dumps({
                             "type": "pong",
                             "timestamp": datetime.now(timezone.utc).isoformat()
                         }))
-                except json.JSONDecodeError:
-                    pass  # Ignore invalid JSON
+                    elif message_type == "subscribe_progress":
+                        # Client wants to subscribe to progress updates
+                        session_id = message.get("session_id")
+                        if session_id:
+                            await websocket_manager.subscribe_to_session(
+                                connection_id, session_id
+                            )
                     
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON message from client: {data}")
+                
             except WebSocketDisconnect:
+                logger.info(f"WebSocket client disconnected: {workspace_id}")
                 break
             except Exception as e:
-                logger.warning(
-                    "WebSocket message handling error",
-                    workspace_id=workspace_id,
-                    connection_id=connection_id,
-                    error=str(e)
-                )
-                break
+                logger.error(f"WebSocket message handling error: {e}")
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": "Message processing failed"
+                }))
                 
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket connection closed: {workspace_id}")
     except Exception as e:
-        logger.error(
-            "WebSocket connection error",
-            workspace_id=workspace_id,
-            error=str(e)
-        )
+        logger.error(f"WebSocket connection error: {e}")
     finally:
-        # Clean up connection
         if connection_id:
-            websocket_manager.disconnect(workspace_id, connection_id)
-            
-            logger.info(
-                "WebSocket connection closed",
-                workspace_id=workspace_id,
-                connection_id=connection_id
-            )
-
-# Comprehensive exception handler
-@app.exception_handler(Exception)
-async def general_exception_handler(request: Request, exc: Exception):
-    """Handle all unhandled exceptions"""
-    request_id = str(uuid.uuid4())
-    
-    logger.error(
-        "Unhandled exception",
-        request_id=request_id,
-        path=request.url.path,
-        error=str(exc),
-        error_type=type(exc).__name__
-    )
-    
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal server error",
-            "message": "An unexpected error occurred",
-            "request_id": request_id,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        },
-        headers={
-            "X-Request-ID": request_id
-        }
-    )
+            await websocket_manager.disconnect(connection_id)
 
 @app.get("/")
 async def root():
-    """Root endpoint with comprehensive platform information"""
-    
+    """Root endpoint with refactored system information"""
     return {
-        "message": "WolfMerge Enterprise Compliance Platform",
-        "version": "2.0.0",
-        "day": "Day 2 - Enterprise Cloud Platform with Docling Intelligence",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "description": "AI-powered German DSGVO compliance analysis for SME and enterprise teams",
-        
+        "message": "🐺 WolfMerge Enterprise Compliance Platform",
+        "version": settings.api_version,
+        "architecture": "Refactored v2.0",
+        "status": "operational",
         "features": {
-            "day_1_features": [
-                "German DSGVO compliance analysis",
-                "Multi-framework support (GDPR/SOC2/HIPAA/ISO27001)",
-                "Professional API with OpenAPI documentation",
-                "EU cloud deployment"
-            ],
-            "day_2_enhancements": [
-                "Docling intelligent document processing",
-                "Team workspace collaboration",
-                "Chunk-level compliance analysis",
-                "GDPR-compliant audit trails",
-                "German industry-specific templates",
-                "Enterprise-grade security and monitoring"
-            ]
+            "compliance_analysis": "Multi-framework support",
+            "german_authorities": "BfDI, BayLDA, LfD detection",
+            "parallel_processing": "Intelligent job queue",
+            "real_time_progress": "WebSocket updates",
+            "team_workspaces": "Collaborative compliance",
+            "refactored_architecture": "Clean, maintainable services"
         },
-        
-        "api_endpoints": {
-            "day_1_basic": {
-                "analyze": "/api/compliance/analyze",
-                "frameworks": "/api/compliance/frameworks",
-                "health": "/health"
-            },
-            "day_2_enterprise": {
-                "analyze": "/api/v2/compliance/analyze",
-                "history": "/api/v2/compliance/workspace/{workspace_id}/history",
-                "audit_trail": "/api/v2/compliance/workspace/{workspace_id}/audit-trail",
-                "compliance_report": "/api/v2/compliance/workspace/{workspace_id}/compliance-report",
-                "german_templates": "/api/v2/compliance/templates/german-industry",
-                "health": "/api/v2/compliance/health"
-            }
+        "endpoints": {
+            "compliance_analysis": "/api/v2/compliance/analyze",
+            "health_check": "/api/v2/compliance/health",
+            "performance_summary": "/api/v2/compliance/performance/summary",
+            "supported_frameworks": "/api/v2/compliance/frameworks",
+            "german_authorities": "/api/v2/compliance/authorities/german",
+            "websocket": "/ws/{workspace_id}"
         },
-        
-        "german_compliance": {
-            "dsgvo_articles_supported": ["Art. 5", "Art. 6", "Art. 7", "Art. 13-18", "Art. 20", "Art. 25", "Art. 30", "Art. 32", "Art. 35"],
-            "german_authorities": ["BfDI", "BayLDA", "LfDI"],
-            "industry_templates": ["automotive", "healthcare", "manufacturing"],
-            "language_support": ["German (de)", "English (en)"],
-            "legal_framework_coverage": ["DSGVO", "BDSG", "GDPR"]
-        },
-        
-        "enterprise_ready": {
-            "eu_cloud_deployment": settings.eu_region,
-            "gdpr_compliance": settings.gdpr_compliance,
-            "audit_trails": settings.audit_logging,
-            "team_workspaces": settings.enable_workspaces,
-            "document_intelligence": settings.docling_enabled,
-            "data_residency": settings.data_residency
-        },
-        
-        "target_market": {
-            "primary": "German SMEs (10-500 employees)",
-            "secondary": "German compliance consultants", 
-            "pricing_model": "€200/month SME tier vs €2000+/month enterprise alternatives",
-            "value_proposition": "Enterprise-grade German DSGVO compliance at SME-friendly pricing"
-        },
-        
-        "documentation": {
-            "interactive_docs": "/docs",
-            "redoc": "/redoc",
-            "openapi_spec": "/openapi.json"
-        }
+        "documentation": "/docs",
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 @app.get("/health")
 async def health_check_endpoint():
-    """Comprehensive health check for Day 2 enterprise platform"""
+    """System health check endpoint"""
     
     try:
-        # Get database health
+        # Check database
         db_health = await health_check()
         
-        # Enhanced health checks for all services
-        service_checks = {
-            "api_server": True,  # Always true if we get here
-            "database": False,
-            "openai": False,
-            "docling": False,
-            "smart_docling": False  # NEW: Added Smart Docling check
-        }
-        
-        # Check database
-        service_checks["database"] = db_health.get("database_connected", False)
-        
-        # Check OpenAI
-        try:
-            client = OpenAI(api_key=settings.openai_api_key)
-            # Simple check - just see if client initializes
-            service_checks["openai"] = True
-        except Exception as e:
-            logger.warning("OpenAI health check failed", error=str(e))
-        
-        # Check Docling (simple check - see if it's enabled)
-        service_checks["docling"] = settings.docling_enabled
-        
-        # NEW: Check Smart Docling
+        # Check Docling
         docling_status = get_docling_status()
-        service_checks["smart_docling"] = docling_status["docling_available"]
         
-        # Overall system health
-        all_healthy = all([
-            service_checks["database"],
-            service_checks["openai"],
-            # Docling is optional, so don't require it for overall health
+        # Check settings
+        settings_valid = all([
+            settings.openai_api_key,
+            settings.database_url,
+            settings.secret_key
         ])
         
-        health_status = {
-            "status": "healthy" if all_healthy else "degraded",
+        health_data = {
+            "status": "healthy",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "version": "2.0.0",
-            "environment": settings.environment,
-            
-            "core_services": service_checks,
-            
-            "database_details": db_health,
-            
-            "smart_docling_status": docling_status,  # NEW: Added Smart Docling status
-            
-            "websocket_status": {
-                "manager_active": True,
-                "active_connections": websocket_manager.active_connections,
-                "active_workspaces": len(websocket_manager.connections)
-            },
-            
-            "compliance_features": {
-                "german_dsgvo_analysis": "active",
-                "multi_framework_support": "active", 
-                "audit_trails": "active" if settings.audit_logging else "inactive",
-                "eu_data_residency": "compliant" if settings.eu_region else "non_compliant",
-                "gdpr_compliance": "enforced" if settings.gdpr_compliance else "disabled"
-            },
-            
-            "performance_metrics": {
-                "max_file_size_mb": settings.max_file_size_mb,
-                "max_files_per_batch": settings.max_files_per_batch,
-                "max_chunks_per_document": settings.max_chunks_per_document,
-                "data_retention_hours": settings.data_retention_hours,
-                "audit_retention_days": settings.audit_retention_days
-            },
-            
-            "day_2_capabilities": {
-                "docling_intelligence": settings.docling_enabled,
-                "team_workspaces": settings.enable_workspaces,
-                "chunk_level_analysis": True,
-                "german_industry_templates": True,
-                "enterprise_audit_reports": True
+            "version": settings.api_version,
+            "architecture": "refactored_v2.0",
+            "components": {
+                "database": {
+                    "status": "connected" if db_health.get("database_connected") else "disconnected",
+                    "tables_created": db_health.get("tables_created", False)
+                },
+                "docling": {
+                    "status": "available" if docling_status.get("docling_available") else "unavailable",
+                    "environment": docling_status.get("environment")
+                },
+                "settings": {
+                    "status": "valid" if settings_valid else "invalid",
+                    "openai_configured": bool(settings.openai_api_key),
+                    "authority_engine_enabled": settings.big4_authority_engine_enabled
+                }
             }
         }
         
-        logger.info("Health check completed", status=health_status["status"])
+        # Determine overall status
+        component_statuses = [
+            health_data["components"]["database"]["status"] == "connected",
+            health_data["components"]["settings"]["status"] == "valid"
+        ]
         
-        return health_status
+        if not all(component_statuses):
+            health_data["status"] = "degraded"
+        
+        return health_data
         
     except Exception as e:
-        logger.error("Health check failed", error=str(e))
-        
+        logger.error(f"Health check failed: {e}")
         return {
             "status": "unhealthy",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
             "error": str(e),
-            "version": "2.0.0"
-        }
-
-@app.get("/api/status")
-async def api_status():
-    """Detailed API status for monitoring and debugging"""
-    
-    return {
-        "api_version": "2.0.0",
-        "service_name": "WolfMerge Enterprise Compliance Platform",
-        "deployment_info": {
-            "environment": settings.environment,
-            "eu_region": settings.eu_region,
-            "debug_mode": settings.debug,
-            "data_residency": settings.data_residency
-        },
-        
-        "feature_flags": {
-            "docling_enabled": settings.docling_enabled,
-            "workspaces_enabled": settings.enable_workspaces,
-            "audit_logging": settings.audit_logging,
-            "german_templates": True,
-            "chunk_analysis": True
-        },
-        
-        "api_capabilities": {
-            "backward_compatible": True,
-            "day_1_endpoints": "active",
-            "day_2_endpoints": "active",
-            "german_compliance": "specialized",
-            "enterprise_features": "full"
-        },
-        
-        "supported_formats": settings.allowed_extensions,
-        "supported_frameworks": ["gdpr", "soc2", "hipaa", "iso27001"],
-        "supported_languages": ["de", "en"],
-        
-        "limits": {
-            "max_file_size_mb": settings.max_file_size_mb,
-            "max_files_per_batch": settings.max_files_per_batch,
-            "max_workspace_size_mb": settings.max_workspace_size_mb,
-            "max_users_per_workspace": settings.max_users_per_workspace
-        }
-    }
-
-@app.get("/api/v2/websocket/stats")
-async def get_websocket_stats():
-    """Get WebSocket connection statistics"""
-    
-    return {
-        "websocket_stats": websocket_manager.get_manager_stats(),
-        "day3_features": {
-            "real_time_progress": True,
-            "ui_context_updates": True,
-            "performance_monitoring": True,
-            "error_notifications": True
-        },
-        "connection_info": {
-            "endpoint": "/ws/{workspace_id}",
-            "supported_messages": [
-                "job_progress",
-                "batch_started", 
-                "batch_completed",
-                "ui_context_update",
-                "performance_update",
-                "error_notification"
-            ]
-        }
-    }
-
-# Exception handlers for enterprise-grade error handling
-@app.exception_handler(404)
-async def not_found_handler(request: Request, exc):
-    """Custom 404 handler with helpful information"""
-    
-    request_id = str(uuid.uuid4())
-    
-    logger.warning(
-        "404 Not Found",
-        request_id=request_id,
-        path=request.url.path,
-        method=request.method,
-        client_ip=request.client.host if request.client else None
-    )
-    
-    return JSONResponse(
-        status_code=404,
-        content={
-            "error": "Not Found",
-            "message": f"The requested endpoint {request.url.path} was not found",
-            "available_endpoints": {
-                "day_1_api": "/api/compliance/*",
-                "day_2_api": "/api/v2/compliance/*",
-                "documentation": "/docs",
-                "health_check": "/health"
-            },
-            "request_id": request_id,
             "timestamp": datetime.now(timezone.utc).isoformat()
-        },
-        headers={
-            "X-Request-ID": request_id
         }
-    )
-
-@app.exception_handler(500)
-async def internal_error_handler(request: Request, exc):
-    """Custom 500 handler with enterprise error tracking"""
-    
-    request_id = str(uuid.uuid4())
-    
-    logger.error(
-        "500 Internal Server Error",
-        request_id=request_id,
-        path=request.url.path,
-        method=request.method,
-        error=str(exc),
-        client_ip=request.client.host if request.client else None
-    )
-    
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal Server Error",
-            "message": "An unexpected error occurred while processing your request",
-            "support_info": {
-                "contact": "For support, please check the health endpoint: /health",
-                "documentation": "/docs",
-                "request_id": request_id,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-        },
-        headers={
-            "X-Request-ID": request_id
-        }
-    )
