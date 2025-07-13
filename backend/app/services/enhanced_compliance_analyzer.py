@@ -1,4 +1,4 @@
-# app/services/enhanced_compliance_analyzer.py - Day 2 Enterprise Analysis
+# app/services/enhanced_compliance_analyzer.py - Day 2 Enterprise Analysis (Merged with Progress Tracking)
 import time
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 from openai import OpenAI  # FIXED: correct import
+from fastapi import HTTPException
 
 from app.config import settings
 from app.models.database import Workspace, User, Document, DocumentChunk, ComplianceAnalysis
@@ -31,18 +32,29 @@ class EnhancedComplianceAnalyzer:
         files: List[Tuple[str, bytes, int]],  # filename, content, size
         workspace_id: str,
         user_id: str,
-        framework: ComplianceFramework = ComplianceFramework.GDPR
+        framework: ComplianceFramework = ComplianceFramework.GDPR,
+        progress_callback: Optional[callable] = None  # MERGED: Added progress callback parameter
     ) -> AnalysisResponse:
-        """Enhanced analysis with workspace context and intelligent chunking"""
+        """
+        Enhanced analysis with workspace context and intelligent chunking
+        
+        Args:
+            files: List of (filename, content, size) tuples
+            workspace_id: Target workspace ID
+            user_id: User performing the analysis
+            framework: Compliance framework to analyze against
+            progress_callback: Optional callback for progress updates
+        """
         
         start_time = time.time()
         
         logger.info(
-            "Starting workspace document analysis",
+            "Starting workspace compliance analysis",
             workspace_id=workspace_id,
             user_id=user_id,
             framework=framework.value,
-            document_count=len(files)
+            document_count=len(files),
+            progress_tracking=progress_callback is not None  # MERGED: Added progress tracking log
         )
         
         # Log analysis start for audit trail
@@ -59,50 +71,109 @@ class EnhancedComplianceAnalyzer:
         )
         
         try:
+            # MERGED: Progress tracking setup
+            if progress_callback:
+                await progress_callback({
+                    "type": "analysis_started",
+                    "total_documents": len(files),
+                    "framework": framework.value
+                })
+            
             # Process each document with Docling
             individual_analyses = []
             all_chunks_metadata = []
             
-            for filename, content, size in files:
+            for idx, (filename, content, size) in enumerate(files):  # MERGED: Added idx for progress tracking
                 logger.info(
                     "Processing document",
                     filename=filename,
                     size=size,
-                    workspace_id=workspace_id
+                    workspace_id=workspace_id,
+                    progress=f"{idx + 1}/{len(files)}"  # MERGED: Added progress info
                 )
                 
-                # Process with Docling for intelligent chunking
-                chunks, metadata = await self.docling_processor.process_document(
-                    content, filename, workspace_id, user_id
-                )
+                # MERGED: Progress update for current document
+                if progress_callback:
+                    await progress_callback({
+                        "type": "document_processing",
+                        "document_name": filename,
+                        "document_index": idx + 1,
+                        "total_documents": len(files),
+                        "status": "processing"
+                    })
                 
-                # Store document and chunks in database with proper transaction handling
-                document = await self._store_document_with_chunks(
-                    workspace_id, user_id, filename, size, metadata, chunks
-                )
-                
-                # Analyze chunks for compliance
-                chunk_analyses = await self._analyze_document_chunks(
-                    chunks, framework, filename, workspace_id
-                )
-                
-                # Create document-level analysis
-                doc_analysis = await self._create_document_analysis(
-                    document, chunk_analyses, framework, metadata
-                )
-                
-                individual_analyses.append(doc_analysis)
-                all_chunks_metadata.extend(chunks)
-                
-                # Secure cleanup of file content (GDPR compliance)
-                await self._secure_delete_content(content)
-                
-                logger.info(
-                    "Document processing completed",
-                    filename=filename,
-                    chunks_created=len(chunks),
-                    german_detected=metadata.get('german_content_detected', False)
-                )
+                try:
+                    # Process with Docling for intelligent chunking
+                    chunks, metadata = await self.docling_processor.process_document(
+                        content, filename, workspace_id, user_id
+                    )
+                    
+                    # Store document and chunks in database with proper transaction handling
+                    document = await self._store_document_with_chunks(
+                        workspace_id, user_id, filename, size, metadata, chunks
+                    )
+                    
+                    # Analyze chunks for compliance
+                    chunk_analyses = await self._analyze_document_chunks(
+                        chunks, framework, filename, workspace_id
+                    )
+                    
+                    # Create document-level analysis
+                    doc_analysis = await self._create_document_analysis(
+                        document, chunk_analyses, framework, metadata
+                    )
+                    
+                    individual_analyses.append(doc_analysis)
+                    all_chunks_metadata.extend(chunks)
+                    
+                    # MERGED: Progress update for completed document
+                    if progress_callback:
+                        await progress_callback({
+                            "type": "document_completed",
+                            "document_name": filename,
+                            "document_index": idx + 1,
+                            "total_documents": len(files),
+                            "chunks_created": len(chunks),
+                            "german_content": metadata.get('german_content_detected', False)
+                        })
+                    
+                    # Secure cleanup of file content (GDPR compliance)
+                    await self._secure_delete_content(content)
+                    
+                    logger.info(
+                        "Document processing completed",
+                        filename=filename,
+                        chunks_created=len(chunks),
+                        german_detected=metadata.get('german_content_detected', False)
+                    )
+                    
+                except Exception as doc_error:  # MERGED: Added individual document error handling
+                    logger.error(
+                        "Document processing failed",
+                        filename=filename,
+                        error=str(doc_error)
+                    )
+                    
+                    # MERGED: Progress update for failed document
+                    if progress_callback:
+                        await progress_callback({
+                            "type": "document_failed",
+                            "document_name": filename,
+                            "document_index": idx + 1,
+                            "total_documents": len(files),
+                            "error": str(doc_error)
+                        })
+                    
+                    # Continue with other documents instead of failing completely
+                    continue
+            
+            # MERGED: Progress update for analysis phase
+            if progress_callback:
+                await progress_callback({
+                    "type": "generating_report",
+                    "documents_processed": len(individual_analyses),
+                    "status": "analyzing_compliance"
+                })
             
             # Create workspace-level compliance report
             compliance_report = await self._create_workspace_compliance_report(
@@ -115,6 +186,16 @@ class EnhancedComplianceAnalyzer:
             )
             
             processing_time = time.time() - start_time
+            
+            # MERGED: Final progress update
+            if progress_callback:
+                await progress_callback({
+                    "type": "analysis_completed",
+                    "total_documents": len(files),
+                    "successful_documents": len(individual_analyses),
+                    "processing_time": processing_time,
+                    "compliance_score": compliance_report.compliance_score
+                })
             
             # Log successful completion
             await self.audit_service.log_action(
@@ -175,14 +256,27 @@ class EnhancedComplianceAnalyzer:
                 }
             )
             
+            # MERGED: Final error progress update
+            if progress_callback:
+                await progress_callback({
+                    "type": "analysis_failed",
+                    "error": str(e),
+                    "processing_time": time.time() - start_time
+                })
+            
             logger.error(
-                "Workspace analysis failed",
+                "Workspace compliance analysis failed",
                 workspace_id=workspace_id,
                 user_id=user_id,
-                error=str(e)
+                error=str(e),
+                processing_time=time.time() - start_time  # MERGED: Added processing time to error log
             )
             
-            raise
+            # MERGED: Raise HTTPException instead of generic exception for better error handling
+            raise HTTPException(
+                status_code=500,
+                detail=f"Compliance analysis failed: {str(e)}"
+            )
     
     async def _store_document_with_chunks(
         self,
