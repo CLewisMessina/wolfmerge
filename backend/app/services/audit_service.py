@@ -1,14 +1,15 @@
-# Fix for audit_service.py datetime timezone issues
-# The database expects timezone-naive datetimes but we're providing timezone-aware ones
+# Comprehensive fix for the workspace foreign key violation issue
+# This addresses both the immediate problem and makes the system more robust
 
-# In backend/app/services/audit_service.py
-# Update the datetime handling throughout the file:
+# 1. Fix for audit_service.py - Add error handling for foreign key violations
+# backend/app/services/audit_service.py
 
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone, timedelta
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, desc
+from sqlalchemy.exc import IntegrityError
 import uuid
 
 from app.models.database import AuditLog, Workspace, User
@@ -29,7 +30,17 @@ class AuditService:
     def _calculate_retention_date(self, days: int) -> datetime:
         """Calculate retention date as timezone-naive datetime"""
         return self._get_utc_now() + timedelta(days=days)
-        
+    
+    async def _workspace_exists(self, workspace_id: str) -> bool:
+        """Check if workspace exists in database"""
+        try:
+            result = await self.db.execute(
+                select(Workspace).where(Workspace.id == uuid.UUID(workspace_id))
+            )
+            return result.scalar_one_or_none() is not None
+        except Exception:
+            return False
+    
     async def log_action(
         self,
         workspace_id: str,
@@ -42,11 +53,23 @@ class AuditService:
         user_agent: Optional[str] = None,
         gdpr_basis: Optional[str] = None,
         data_category: Optional[str] = None
-    ) -> str:
+    ) -> Optional[str]:
         """
         Log user action for comprehensive audit trail
-        Returns audit log ID for reference
+        Returns audit log ID for reference, or None if logging failed
+        
+        NEW: Added error handling for foreign key violations
         """
+        
+        # Check if workspace exists before attempting to log
+        if not await self._workspace_exists(workspace_id):
+            logger.warning(
+                "Audit log skipped - workspace not found",
+                workspace_id=workspace_id,
+                action=action,
+                message="Consider creating workspace or using valid workspace_id"
+            )
+            return None
         
         # Calculate retention date (timezone-naive for database)
         retain_until = self._calculate_retention_date(settings.audit_retention_days)
@@ -59,36 +82,58 @@ class AuditService:
         if not data_category:
             data_category = self._categorize_data_processing(action, resource_type)
         
-        # Create audit entry with timezone-naive datetimes
-        audit_entry = AuditLog(
-            workspace_id=uuid.UUID(workspace_id),
-            user_id=uuid.UUID(user_id) if user_id else None,
-            action=action,
-            resource_type=resource_type,
-            resource_id=uuid.UUID(resource_id) if resource_id else None,
-            details=details or {},
-            ip_address=ip_address,
-            user_agent=user_agent,
-            gdpr_basis=gdpr_basis,
-            data_category=data_category,
-            status="success",
-            retain_until=retain_until
-            # created_at will be auto-set by the model's default
-        )
-        
-        self.db.add(audit_entry)
-        await self.db.commit()
-        
-        logger.info(
-            "Audit entry created",
-            audit_id=str(audit_entry.id),
-            workspace_id=workspace_id,
-            action=action,
-            resource_type=resource_type,
-            gdpr_basis=gdpr_basis
-        )
-        
-        return str(audit_entry.id)
+        try:
+            # Create audit entry with timezone-naive datetimes
+            audit_entry = AuditLog(
+                workspace_id=uuid.UUID(workspace_id),
+                user_id=uuid.UUID(user_id) if user_id else None,
+                action=action,
+                resource_type=resource_type,
+                resource_id=uuid.UUID(resource_id) if resource_id else None,
+                details=details or {},
+                ip_address=ip_address,
+                user_agent=user_agent,
+                gdpr_basis=gdpr_basis,
+                data_category=data_category,
+                status="success",
+                retain_until=retain_until
+            )
+            
+            self.db.add(audit_entry)
+            await self.db.commit()
+            
+            logger.info(
+                "Audit entry created successfully",
+                audit_id=str(audit_entry.id),
+                workspace_id=workspace_id,
+                action=action,
+                resource_type=resource_type,
+                gdpr_basis=gdpr_basis
+            )
+            
+            return str(audit_entry.id)
+            
+        except IntegrityError as e:
+            await self.db.rollback()
+            logger.warning(
+                "Failed to write audit log - integrity constraint violation",
+                workspace_id=workspace_id,
+                action=action,
+                error=str(e),
+                message="Continuing without audit log to prevent service disruption"
+            )
+            return None
+            
+        except Exception as e:
+            await self.db.rollback()
+            logger.error(
+                "Unexpected error writing audit log",
+                workspace_id=workspace_id,
+                action=action,
+                error=str(e),
+                exc_info=True
+            )
+            return None
     
     async def log_error(
         self,
@@ -99,231 +144,71 @@ class AuditService:
         resource_type: Optional[str] = None,
         resource_id: Optional[str] = None,
         details: Optional[Dict[str, Any]] = None
-    ) -> str:
-        """Log failed action for audit trail"""
+    ) -> Optional[str]:
+        """Log failed action for audit trail with error handling"""
         
-        # Use timezone-naive datetime for database
-        retain_until = self._calculate_retention_date(settings.audit_retention_days)
+        # Check if workspace exists
+        if not await self._workspace_exists(workspace_id):
+            logger.warning(
+                "Error audit log skipped - workspace not found",
+                workspace_id=workspace_id,
+                action=action,
+                error_message=error_message
+            )
+            return None
         
-        audit_entry = AuditLog(
-            workspace_id=uuid.UUID(workspace_id),
-            user_id=uuid.UUID(user_id) if user_id else None,
-            action=action,
-            resource_type=resource_type,
-            resource_id=uuid.UUID(resource_id) if resource_id else None,
-            details=details or {},
-            gdpr_basis=self._determine_gdpr_basis(action, resource_type),
-            data_category=self._categorize_data_processing(action, resource_type),
-            status="failure",
-            error_message=error_message,
-            retain_until=retain_until
-            # created_at will be auto-set by the model's default
-        )
-        
-        self.db.add(audit_entry)
-        await self.db.commit()
-        
-        logger.error(
-            "Audit error logged",
-            audit_id=str(audit_entry.id),
-            workspace_id=workspace_id,
-            action=action,
-            error=error_message
-        )
-        
-        return str(audit_entry.id)
-    
-    async def get_workspace_audit_trail(
-        self,
-        workspace_id: str,
-        limit: int = 100,
-        action_filter: Optional[str] = None,
-        user_filter: Optional[str] = None,
-        date_from: Optional[datetime] = None,
-        date_to: Optional[datetime] = None
-    ) -> List[AuditLog]:
-        """Get filtered audit trail for workspace"""
-        
-        query = select(AuditLog).where(
-            AuditLog.workspace_id == uuid.UUID(workspace_id)
-        )
-        
-        # Apply filters (convert timezone-aware dates to naive if needed)
-        if action_filter:
-            query = query.where(AuditLog.action.ilike(f"%{action_filter}%"))
-        
-        if user_filter:
-            query = query.where(AuditLog.user_id == uuid.UUID(user_filter))
-        
-        if date_from:
-            # Ensure timezone-naive for database comparison
-            if date_from.tzinfo is not None:
-                date_from = date_from.replace(tzinfo=None)
-            query = query.where(AuditLog.created_at >= date_from)
-        
-        if date_to:
-            # Ensure timezone-naive for database comparison
-            if date_to.tzinfo is not None:
-                date_to = date_to.replace(tzinfo=None)
-            query = query.where(AuditLog.created_at <= date_to)
-        
-        # Order by most recent first and limit results
-        query = query.order_by(desc(AuditLog.created_at)).limit(limit)
-        
-        result = await self.db.execute(query)
-        audit_entries = result.scalars().all()
-        
-        logger.info(
-            "Audit trail retrieved",
-            workspace_id=workspace_id,
-            entries_returned=len(audit_entries),
-            filters_applied={
-                "action": action_filter,
-                "user": user_filter,
-                "date_from": date_from,
-                "date_to": date_to
-            }
-        )
-        
-        return audit_entries
-    
-    async def cleanup_expired_audit_logs(self) -> int:
-        """Clean up audit logs that have exceeded retention period"""
-        
-        # Use timezone-naive datetime for database comparison
-        current_time = self._get_utc_now()
-        
-        # Find expired entries
-        query = select(AuditLog).where(
-            AuditLog.retain_until < current_time
-        )
-        
-        result = await self.db.execute(query)
-        expired_entries = result.scalars().all()
-        
-        # Delete expired entries
-        deleted_count = 0
-        for entry in expired_entries:
-            await self.db.delete(entry)
-            deleted_count += 1
-        
-        if deleted_count > 0:
+        try:
+            retain_until = self._calculate_retention_date(settings.audit_retention_days)
+            
+            audit_entry = AuditLog(
+                workspace_id=uuid.UUID(workspace_id),
+                user_id=uuid.UUID(user_id) if user_id else None,
+                action=action,
+                resource_type=resource_type,
+                resource_id=uuid.UUID(resource_id) if resource_id else None,
+                details=details or {},
+                gdpr_basis=self._determine_gdpr_basis(action, resource_type),
+                data_category=self._categorize_data_processing(action, resource_type),
+                status="failure",
+                error_message=error_message,
+                retain_until=retain_until
+            )
+            
+            self.db.add(audit_entry)
             await self.db.commit()
             
-            logger.info(
-                "Expired audit logs cleaned up",
-                deleted_count=deleted_count,
-                cleanup_date=current_time.isoformat()
+            logger.error(
+                "Audit error logged successfully",
+                audit_id=str(audit_entry.id),
+                workspace_id=workspace_id,
+                action=action,
+                error=error_message
             )
-        
-        return deleted_count
-    
-    async def get_compliance_audit_report(
-        self,
-        workspace_id: str,
-        report_type: str = "monthly"
-    ) -> Dict[str, Any]:
-        """Generate compliance audit report for German authorities"""
-        
-        # Calculate date range based on report type (timezone-naive)
-        end_date = self._get_utc_now()
-        if report_type == "weekly":
-            start_date = end_date - timedelta(days=7)
-        elif report_type == "monthly":
-            start_date = end_date - timedelta(days=30)
-        elif report_type == "quarterly":
-            start_date = end_date - timedelta(days=90)
-        else:
-            start_date = end_date - timedelta(days=365)  # yearly
-        
-        # Get audit entries for period
-        audit_entries = await self.get_workspace_audit_trail(
-            workspace_id=workspace_id,
-            limit=10000,  # High limit for comprehensive report
-            date_from=start_date,
-            date_to=end_date
-        )
-        
-        # Analyze audit data
-        report = {
-            "report_metadata": {
-                "workspace_id": workspace_id,
-                "report_type": report_type,
-                "period_start": start_date.isoformat(),
-                "period_end": end_date.isoformat(),
-                "generated_at": end_date.isoformat(),
-                "total_entries": len(audit_entries),
-                "gdpr_compliant": True,
-                "retention_policy": f"{settings.audit_retention_days} days"
-            },
-            "activity_summary": self._analyze_activity_patterns(audit_entries),
-            "gdpr_compliance": self._analyze_gdpr_compliance(audit_entries),
-            "security_events": self._identify_security_events(audit_entries),
-            "user_activity": self._analyze_user_activity(audit_entries),
-            "data_processing_summary": self._summarize_data_processing(audit_entries),
-            "recommendations": self._generate_audit_recommendations(audit_entries)
-        }
-        
-        logger.info(
-            "Compliance audit report generated",
-            workspace_id=workspace_id,
-            report_type=report_type,
-            entries_analyzed=len(audit_entries),
-            security_events=len(report["security_events"])
-        )
-        
-        return report
-    
-    def _analyze_gdpr_compliance(self, audit_entries: List[AuditLog]) -> Dict[str, Any]:
-        """Analyze GDPR compliance aspects of audit trail"""
-        
-        gdpr_analysis = {
-            "legal_basis_coverage": {},
-            "data_category_processing": {},
-            "retention_compliance": True,
-            "data_subject_rights_requests": 0,
-            "consent_management_events": 0,
-            "data_deletion_events": 0,
-            "breach_indicators": []
-        }
-        
-        # Use timezone-naive datetime for comparison
-        current_time = self._get_utc_now()
-        
-        for entry in audit_entries:
-            # Legal basis analysis
-            basis = entry.gdpr_basis or "Unknown"
-            gdpr_analysis["legal_basis_coverage"][basis] = gdpr_analysis["legal_basis_coverage"].get(basis, 0) + 1
             
-            # Data category analysis
-            category = entry.data_category or "Unknown"
-            gdpr_analysis["data_category_processing"][category] = gdpr_analysis["data_category_processing"].get(category, 0) + 1
+            return str(audit_entry.id)
             
-            # Check retention compliance
-            if entry.retain_until and entry.retain_until < current_time:
-                gdpr_analysis["retention_compliance"] = False
+        except IntegrityError as e:
+            await self.db.rollback()
+            logger.warning(
+                "Failed to write error audit log - integrity constraint violation",
+                workspace_id=workspace_id,
+                action=action,
+                original_error=error_message,
+                audit_error=str(e)
+            )
+            return None
             
-            # Count specific GDPR-related actions
-            if "data_subject_request" in entry.action:
-                gdpr_analysis["data_subject_rights_requests"] += 1
-            elif "consent" in entry.action:
-                gdpr_analysis["consent_management_events"] += 1
-            elif "delete" in entry.action or "purge" in entry.action:
-                gdpr_analysis["data_deletion_events"] += 1
-            
-            # Identify potential breach indicators
-            if entry.status == "failure" and any(
-                keyword in entry.action for keyword in ["unauthorized", "breach", "violation"]
-            ):
-                gdpr_analysis["breach_indicators"].append({
-                    "timestamp": entry.created_at.isoformat() if entry.created_at else None,
-                    "action": entry.action,
-                    "error": entry.error_message
-                })
-        
-        return gdpr_analysis
-    
-    # Rest of the methods remain the same, just ensure any datetime operations use timezone-naive datetimes
+        except Exception as e:
+            await self.db.rollback()
+            logger.error(
+                "Unexpected error writing error audit log",
+                workspace_id=workspace_id,
+                action=action,
+                original_error=error_message,
+                audit_error=str(e),
+                exc_info=True
+            )
+            return None
     
     def _determine_gdpr_basis(self, action: str, resource_type: Optional[str]) -> str:
         """Determine GDPR legal basis for processing"""
@@ -360,3 +245,287 @@ class AuditService:
             return "workspace_management_data"
         else:
             return "system_operation_data"
+
+
+# 2. Enhanced init_demo_data function with better error handling
+# backend/app/database.py (replacement for init_demo_data function)
+
+async def init_demo_data():
+    """Initialize demo workspace and data for Day 2 testing with enhanced error handling"""
+    
+    demo_workspace_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    demo_admin_id = uuid.UUID("00000000-0000-0000-0000-000000000002")
+    
+    try:
+        async with AsyncSessionLocal() as session:
+            logger.info("Starting demo data initialization...")
+            
+            # Check if demo workspace already exists
+            try:
+                existing_workspace = await session.get(Workspace, demo_workspace_id)
+                if existing_workspace:
+                    logger.info(
+                        "Demo data already exists",
+                        workspace_id=str(demo_workspace_id),
+                        workspace_name=existing_workspace.name
+                    )
+                    return
+            except Exception as e:
+                logger.warning(f"Error checking existing workspace: {e}")
+                # Continue with creation attempt
+            
+            # Create demo workspace for German SME
+            try:
+                demo_workspace = Workspace(
+                    id=demo_workspace_id,
+                    name="Beispiel GmbH Compliance Team",
+                    organization="Beispiel GmbH",
+                    country="DE",
+                    industry="automotive",
+                    compliance_frameworks=["gdpr", "iso27001"],
+                    german_authority="BfDI",
+                    dpo_contact="dpo@beispiel-gmbh.de",
+                    legal_entity_type="GmbH",
+                    language_preference="de",
+                    timezone="Europe/Berlin",
+                    gdpr_consent=True,
+                    audit_level="enhanced",
+                    subscription_tier="sme",
+                    max_documents=500,
+                    max_users=25
+                )
+                
+                session.add(demo_workspace)
+                await session.flush()  # Get the ID assigned
+                
+                logger.info(
+                    "Demo workspace created",
+                    workspace_id=str(demo_workspace.id),
+                    workspace_name=demo_workspace.name
+                )
+                
+            except Exception as e:
+                logger.error(f"Failed to create demo workspace: {e}")
+                await session.rollback()
+                raise
+            
+            # Create demo admin user
+            try:
+                demo_admin = User(
+                    id=demo_admin_id,
+                    email="admin@beispiel-gmbh.de",
+                    name="Dr. Maria Schmidt",
+                    workspace_id=demo_workspace.id,
+                    role="admin",
+                    german_certification="TÜV Certified DPO",
+                    language_preference="de",
+                    hashed_password="demo_password_hash",
+                    is_active=True,
+                    email_verified=True,
+                    # Use timezone-naive datetime for GDPR consent
+                    gdpr_consent_date=datetime.now(timezone.utc).replace(tzinfo=None),
+                    data_processing_consent=True
+                )
+                
+                session.add(demo_admin)
+                await session.flush()
+                
+                logger.info(
+                    "Demo admin user created",
+                    user_id=str(demo_admin.id),
+                    user_email=demo_admin.email
+                )
+                
+            except Exception as e:
+                logger.error(f"Failed to create demo admin user: {e}")
+                await session.rollback()
+                raise
+            
+            # Commit all changes
+            await session.commit()
+            
+            logger.info(
+                "✅ Demo data initialized successfully",
+                workspace_id=str(demo_workspace_id),
+                admin_user_id=str(demo_admin_id),
+                workspace_name="Beispiel GmbH Compliance Team"
+            )
+            
+    except Exception as e:
+        logger.error(
+            "❌ Failed to initialize demo data",
+            error=str(e),
+            workspace_id=str(demo_workspace_id),
+            exc_info=True
+        )
+        # Re-raise the exception so startup fails if demo data is critical
+        # Comment out the raise below if you want startup to continue without demo data
+        raise  # This will cause startup to fail, which might be what we want for debugging
+
+
+# 3. Workspace validation helper
+# backend/app/services/workspace_service.py (new file)
+
+from typing import Optional
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+import structlog
+import uuid
+
+from app.models.database import Workspace, User
+
+logger = structlog.get_logger()
+
+class WorkspaceService:
+    """Service for workspace operations and validation"""
+    
+    def __init__(self, db_session: AsyncSession):
+        self.db = db_session
+    
+    async def ensure_workspace_exists(self, workspace_id: str) -> bool:
+        """
+        Ensure workspace exists, create default if needed
+        Returns True if workspace exists or was created successfully
+        """
+        try:
+            # Check if workspace exists
+            result = await self.db.execute(
+                select(Workspace).where(Workspace.id == uuid.UUID(workspace_id))
+            )
+            existing_workspace = result.scalar_one_or_none()
+            
+            if existing_workspace:
+                logger.debug(f"Workspace {workspace_id} exists")
+                return True
+            
+            # If it's the demo workspace ID, create it
+            if workspace_id == "00000000-0000-0000-0000-000000000001":
+                return await self._create_demo_workspace()
+            
+            logger.warning(f"Workspace {workspace_id} does not exist and cannot be auto-created")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error checking workspace existence: {e}")
+            return False
+    
+    async def _create_demo_workspace(self) -> bool:
+        """Create demo workspace on-demand"""
+        try:
+            demo_workspace = Workspace(
+                id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                name="Auto-Created Demo Workspace",
+                organization="Demo Organization",
+                country="DE",
+                industry="technology",
+                compliance_frameworks=["gdpr"],
+                german_authority="BfDI",
+                language_preference="de",
+                timezone="Europe/Berlin",
+                gdpr_consent=True,
+                audit_level="standard",
+                subscription_tier="sme",
+                max_documents=100,
+                max_users=10
+            )
+            
+            self.db.add(demo_workspace)
+            await self.db.commit()
+            
+            logger.info("Demo workspace created successfully on-demand")
+            return True
+            
+        except Exception as e:
+            await self.db.rollback()
+            logger.error(f"Failed to create demo workspace on-demand: {e}")
+            return False
+
+
+# 4. Update enhanced_compliance_analyzer.py to handle audit failures gracefully
+# Add this to the analyze_documents_for_workspace method:
+
+# Replace the audit service call with:
+try:
+    await self.audit_service.log_action(
+        workspace_id=workspace_id,
+        user_id=user_id,
+        action="document_analysis_started",
+        resource_type="analysis",
+        details={
+            "framework": framework.value,
+            "document_count": len(files),
+            "total_size": sum(size for _, _, size in files)
+        }
+    )
+except Exception as audit_error:
+    # Don't fail the entire analysis if audit logging fails
+    logger.warning(
+        "Audit logging failed but continuing with analysis",
+        workspace_id=workspace_id,
+        audit_error=str(audit_error)
+    )
+
+# And at the end of successful analysis:
+try:
+    await self.audit_service.log_action(
+        workspace_id=workspace_id,
+        user_id=user_id,
+        action="document_analysis_completed",
+        resource_type="analysis",
+        resource_id=str(analysis_record.id),
+        details={
+            "framework": framework.value,
+            "documents_analyzed": len(files),
+            "total_chunks": len(all_chunks_metadata),
+            "processing_time": processing_time,
+            "compliance_score": compliance_report.compliance_score
+        }
+    )
+except Exception as audit_error:
+    logger.warning(
+        "Completion audit logging failed",
+        workspace_id=workspace_id,
+        analysis_id=str(analysis_record.id),
+        audit_error=str(audit_error)
+    )
+
+
+# 5. Debug endpoint to check workspace status
+# Add to compliance_router.py:
+
+@router.get("/debug/workspace/{workspace_id}")
+async def debug_workspace_status(
+    workspace_id: str,
+    db_session: AsyncSession = Depends(get_db_session)
+):
+    """Debug endpoint to check workspace status"""
+    try:
+        from app.services.workspace_service import WorkspaceService
+        
+        workspace_service = WorkspaceService(db_session)
+        workspace_exists = await workspace_service.ensure_workspace_exists(workspace_id)
+        
+        # Get workspace details if it exists
+        result = await db_session.execute(
+            select(Workspace).where(Workspace.id == uuid.UUID(workspace_id))
+        )
+        workspace = result.scalar_one_or_none()
+        
+        return {
+            "workspace_id": workspace_id,
+            "exists": workspace_exists,
+            "workspace": {
+                "name": workspace.name if workspace else None,
+                "organization": workspace.organization if workspace else None,
+                "created_at": workspace.created_at.isoformat() if workspace else None
+            } if workspace else None,
+            "demo_workspace_id": "00000000-0000-0000-0000-000000000001",
+            "is_demo_workspace": workspace_id == "00000000-0000-0000-0000-000000000001"
+        }
+        
+    except Exception as e:
+        return {
+            "workspace_id": workspace_id,
+            "error": str(e),
+            "exists": False
+        }
