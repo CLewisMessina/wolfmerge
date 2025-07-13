@@ -1,0 +1,36 @@
+# nixpacks.toml - Railway Deployment Configuration with libmagic support
+# This file configures Nixpacks to install system dependencies required by your application
+
+[phases.setup]
+# Install system packages required for python-magic
+nixPkgs = ["file", "libmagic"]
+
+[phases.install]
+# Python version and package installation
+cmds = [
+    "pip install --upgrade pip",
+    "pip install -r requirements.txt"
+]
+
+[phases.build]
+# Optional build optimizations
+cmds = [
+    "python -c 'import magic; print(\"✅ libmagic successfully available\")'",
+    "python -c 'import app.config; print(\"✅ App configuration loaded\")'",
+]
+
+[start]
+# Application startup command
+cmd = "uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1"
+
+# Environment variables for build and runtime
+[variables]
+PYTHONDONTWRITEBYTECODE = "1"
+PYTHONUNBUFFERED = "1"
+PIP_DISABLE_PIP_VERSION_CHECK = "1"
+PIP_DEFAULT_TIMEOUT = "100"
+
+# Smart Docling configuration to avoid heavy model downloads during build
+ENVIRONMENT = "development"
+DOCLING_LAZY_LOAD = "true"
+SKIP_DOCLING_HEAVY_MODELS = "true"
