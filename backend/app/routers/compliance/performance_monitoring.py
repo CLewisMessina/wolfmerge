@@ -420,23 +420,128 @@ class PerformanceMonitor:
     def create_progress_callback(self, session_id: str) -> Callable:
         """Create a progress callback function for use with other services"""
         
-        async def progress_callback(current: int, total: int, phase: str = "processing"):
-            """Callback function for progress updates"""
+        async def progress_callback(progress_data):
+            """
+            Flexible progress callback that handles both dictionary and parameter formats
+            
+            Supports two calling patterns:
+            1. Dictionary format: progress_callback({"type": "analysis_started", "document_count": 5})
+            2. Parameter format: progress_callback(current=1, total=5, phase="processing")
+            """
             try:
+                # Handle dictionary format (from EnhancedComplianceAnalyzer)
+                if isinstance(progress_data, dict):
+                    # Extract relevant information from dictionary
+                    progress_type = progress_data.get("type", "progress_update")
+                    current = progress_data.get("current", 0)
+                    total = progress_data.get("total", progress_data.get("document_count", 0))
+                    phase = progress_data.get("phase", progress_type)
+                    
+                    # Convert specific progress types to meaningful phases
+                    if progress_type == "analysis_started":
+                        phase = "initialization"
+                        current = 0
+                        total = progress_data.get("document_count", 1)
+                    elif progress_type == "document_processing":
+                        phase = "document_analysis"
+                        current = progress_data.get("document_index", 0)
+                        total = progress_data.get("total_documents", 1)
+                    elif progress_type == "document_completed":
+                        phase = "document_analysis"
+                        current = progress_data.get("document_index", 1)
+                        total = progress_data.get("total_documents", 1)
+                    elif progress_type == "generating_report":
+                        phase = "report_generation"
+                        current = progress_data.get("documents_processed", 0)
+                        total = progress_data.get("documents_processed", 1)
+                    elif progress_type == "analysis_completed":
+                        phase = "completion"
+                        current = progress_data.get("total_documents", 1)
+                        total = progress_data.get("total_documents", 1)
+                    elif progress_type == "analysis_failed":
+                        phase = "error"
+                        current = 0
+                        total = 1
+                    
+                    # Additional context from dictionary
+                    document_name = progress_data.get("document_name", "")
+                    status = progress_data.get("status", "processing")
+                    error_message = progress_data.get("error", "")
+                    
+                else:
+                    # Handle parameter format (legacy support)
+                    # Assume positional arguments: current, total, phase
+                    if hasattr(progress_data, '__iter__') and not isinstance(progress_data, str):
+                        # Multiple arguments passed as tuple/list
+                        args = list(progress_data) if not isinstance(progress_data, list) else progress_data
+                        current = args[0] if len(args) > 0 else 0
+                        total = args[1] if len(args) > 1 else 1
+                        phase = args[2] if len(args) > 2 else "processing"
+                    else:
+                        # Single argument - treat as current progress
+                        current = progress_data if isinstance(progress_data, (int, float)) else 0
+                        total = 1
+                        phase = "processing"
+                    
+                    # Default values for parameter format
+                    document_name = ""
+                    status = "processing"
+                    error_message = ""
+                
+                # Calculate percentage
                 percentage = (current / total) * 100 if total > 0 else 0
                 
+                # Create standardized update data
                 update_data = {
                     "type": "progress_update",
                     "session_id": session_id,
                     "current": current,
                     "total": total,
-                    "percentage": percentage,
-                    "phase": phase
+                    "percentage": round(percentage, 1),
+                    "phase": phase,
+                    "timestamp": time.time()
                 }
                 
-                await progress_handler.send_progress_update(session_id, update_data)
+                # Add optional fields if available
+                if document_name:
+                    update_data["document_name"] = document_name
+                if status:
+                    update_data["status"] = status
+                if error_message:
+                    update_data["error"] = error_message
+                
+                # Send progress update via WebSocket
+                try:
+                    await progress_handler.send_progress_update(session_id, update_data)
+                except NameError:
+                    # progress_handler not available - log instead
+                    logger.info(
+                        "Progress update",
+                        session_id=session_id,
+                        phase=phase,
+                        percentage=percentage,
+                        current=current,
+                        total=total
+                    )
+                
+                # Log detailed progress for debugging
+                logger.debug(
+                    "Progress callback executed",
+                    session_id=session_id,
+                    phase=phase,
+                    current=current,
+                    total=total,
+                    percentage=percentage,
+                    progress_type=progress_data.get("type") if isinstance(progress_data, dict) else "parameter_format"
+                )
                 
             except Exception as e:
-                logger.warning(f"Progress callback failed: {e}")
+                logger.warning(
+                    "Progress callback failed",
+                    session_id=session_id,
+                    error=str(e),
+                    progress_data_type=type(progress_data).__name__,
+                    exc_info=True
+                )
         
         return progress_callback
