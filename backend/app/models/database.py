@@ -1,4 +1,9 @@
-# app/models/database.py - Day 2 Team Workspace Models
+# Fix for database.py models to use timezone-naive datetimes consistently
+# Replace all datetime.now(timezone.utc) with timezone-naive equivalents
+
+# In backend/app/models/database.py
+# Update all model default functions to use timezone-naive datetimes:
+
 from sqlalchemy import Column, String, DateTime, Boolean, Integer, Text, ForeignKey, JSON, Float, LargeBinary
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -8,6 +13,11 @@ from datetime import datetime, timezone
 from typing import Optional
 
 Base = declarative_base()
+
+# Helper function for consistent timezone-naive datetime defaults
+def utc_now_naive():
+    """Return current UTC time as timezone-naive datetime for database compatibility"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 class Workspace(Base):
     """Team workspace for collaborative compliance work"""
@@ -33,8 +43,8 @@ class Workspace(Base):
     
     # Status and metadata
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=utc_now_naive)  # FIXED: timezone-naive
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)  # FIXED: timezone-naive
     
     # Subscription info (for Day 4 SME pricing)
     subscription_tier = Column(String(20), default="sme")  # sme, enterprise
@@ -66,7 +76,7 @@ class User(Base):
     email_verified = Column(Boolean, default=False)
     
     # Timestamps
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=utc_now_naive)  # FIXED: timezone-naive
     last_login = Column(DateTime)
     
     # GDPR compliance
@@ -104,7 +114,7 @@ class Document(Base):
     
     # Upload info
     uploaded_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    uploaded_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    uploaded_at = Column(DateTime, default=utc_now_naive)  # FIXED: timezone-naive
     processed_at = Column(DateTime)
     
     # GDPR compliance
@@ -145,7 +155,7 @@ class DocumentChunk(Base):
     compliance_tags = Column(JSON)  # Compliance-relevant tags
     
     # Processing timestamps
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=utc_now_naive)  # FIXED: timezone-naive
     analyzed_at = Column(DateTime)
     deleted_at = Column(DateTime)  # GDPR compliance - when content was deleted
     
@@ -182,7 +192,7 @@ class ComplianceAnalysis(Base):
     docling_version = Column(String(20))
     
     # Timestamps
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=utc_now_naive)  # FIXED: timezone-naive
     completed_at = Column(DateTime)
     
     # Relationships
@@ -216,7 +226,7 @@ class AuditLog(Base):
     error_message = Column(Text)
     
     # Timestamp
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=utc_now_naive)  # FIXED: timezone-naive
     
     # Retention (for GDPR compliance)
     retain_until = Column(DateTime)  # When this audit log should be deleted
@@ -245,5 +255,5 @@ class ComplianceTemplate(Base):
     version = Column(String(10), default="1.0")
     is_active = Column(Boolean, default=True)
     
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=utc_now_naive)  # FIXED: timezone-naive
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)  # FIXED: timezone-naive
