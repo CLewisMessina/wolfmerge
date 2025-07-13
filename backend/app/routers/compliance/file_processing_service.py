@@ -13,8 +13,15 @@ import structlog
 import asyncio
 from pathlib import Path
 import hashlib
-import magic
 from dataclasses import dataclass
+
+# Graceful import of magic with fallback
+try:
+    import magic
+    MAGIC_AVAILABLE = True
+except ImportError:
+    MAGIC_AVAILABLE = False
+    magic = None
 
 from app.config import settings
 from app.utils.smart_docling import should_use_docling
@@ -72,13 +79,20 @@ class FileProcessingService:
             '.pdf', '.docx', '.doc', '.txt', '.md', '.rtf', '.odt'
         ])
         
-        # Initialize libmagic for MIME type detection
-        try:
-            self.magic_mime = magic.Magic(mime=True)
-            self.magic_available = True
-        except Exception as e:
-            logger.warning(f"libmagic not available, using filename-based detection: {e}")
-            self.magic_available = False
+        # Initialize libmagic for MIME type detection with graceful fallback
+        self.magic_available = False
+        self.magic_mime = None
+        
+        if MAGIC_AVAILABLE:
+            try:
+                self.magic_mime = magic.Magic(mime=True)
+                self.magic_available = True
+                logger.info("✅ libmagic initialized successfully - using accurate MIME detection")
+            except Exception as e:
+                logger.warning(f"libmagic initialization failed, using filename-based detection: {e}")
+                self.magic_available = False
+        else:
+            logger.info("📋 python-magic not available - using filename-based MIME detection")
         
         # Security patterns to detect in content
         self.security_patterns = {
@@ -109,91 +123,47 @@ class FileProcessingService:
                 detail=f"Maximum {self.max_batch_size} files allowed per batch. Got {len(files)} files."
             )
         
-        if not files:
-            raise HTTPException(
-                status_code=400,
-                detail="No files provided for analysis"
-            )
-        
         processed_files = []
         total_size = 0
         
-        logger.info(f"Starting file processing for {len(files)} files")
-        
-        # Process files concurrently for better performance
-        tasks = []
         for file in files:
-            task = self._process_single_file(file)
-            tasks.append(task)
-        
-        try:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            processed_file = await self._process_single_file(file)
+            processed_files.append(processed_file)
+            total_size += processed_file.size
             
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    logger.error(f"File processing failed for {files[i].filename}: {result}")
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"File processing failed for {files[i].filename}: {str(result)}"
-                    )
-                
-                processed_file = result
-                processed_files.append(processed_file)
-                total_size += processed_file.size
-                
-        except Exception as e:
-            if isinstance(e, HTTPException):
-                raise
-            logger.error(f"Batch file processing failed: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Batch file processing failed: {str(e)}"
-            )
+            # Check total batch size
+            if total_size > getattr(settings, 'max_total_file_size_bytes', 50 * 1024 * 1024):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Total batch size exceeds limit. Current: {total_size / (1024*1024):.1f}MB"
+                )
         
-        # Validate total batch size
-        max_total_size = self.max_file_size * len(files)
-        if total_size > max_total_size:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Total batch size ({total_size:,} bytes) exceeds maximum ({max_total_size:,} bytes)"
-            )
-        
-        logger.info(
-            f"File processing completed successfully",
-            file_count=len(processed_files),
-            total_size_mb=total_size / (1024 * 1024),
-            avg_complexity=sum(f.metadata.processing_complexity for f in processed_files) / len(processed_files)
-        )
-        
+        logger.info(f"Successfully processed {len(processed_files)} files, total size: {total_size / (1024*1024):.2f}MB")
         return processed_files
     
     async def _process_single_file(self, file: UploadFile) -> ProcessedFile:
         """Process and validate a single uploaded file"""
         
-        # Basic filename validation
-        if not file.filename:
-            raise ValueError("File must have a filename")
-        
         # Read file content
-        try:
-            content = await file.read()
-        except Exception as e:
-            raise ValueError(f"Failed to read file content: {str(e)}")
+        content = await file.read()
+        await file.seek(0)  # Reset file pointer for potential re-reading
         
         # Validate file size
-        if len(content) == 0:
-            raise ValueError("File is empty")
-        
         if len(content) > self.max_file_size:
-            raise ValueError(
-                f"File size ({len(content):,} bytes) exceeds maximum ({self.max_file_size:,} bytes)"
+            raise HTTPException(
+                status_code=400,
+                detail=f"File {file.filename} exceeds maximum size limit. "
+                       f"Size: {len(content) / (1024*1024):.1f}MB, "
+                       f"Limit: {self.max_file_size / (1024*1024):.1f}MB"
             )
         
         # Validate file extension
         file_ext = Path(file.filename).suffix.lower()
         if file_ext not in self.allowed_extensions:
-            raise ValueError(
-                f"File type '{file_ext}' not supported. Allowed: {', '.join(self.allowed_extensions)}"
+            raise HTTPException(
+                status_code=400,
+                detail=f"File type '{file_ext}' not supported. "
+                       f"Allowed: {', '.join(self.allowed_extensions)}"
             )
         
         # Perform security scanning
@@ -307,44 +277,66 @@ class FileProcessingService:
     async def _detect_mime_type(self, content: bytes, filename: str) -> str:
         """Detect MIME type using libmagic or filename fallback"""
         
-        if self.magic_available:
+        # Try libmagic first if available
+        if self.magic_available and self.magic_mime:
             try:
-                return self.magic_mime.from_buffer(content)
+                detected_mime = self.magic_mime.from_buffer(content)
+                logger.debug(f"MIME type detected via libmagic: {detected_mime}")
+                return detected_mime
             except Exception as e:
-                logger.warning(f"libmagic MIME detection failed: {e}")
+                logger.warning(f"libmagic MIME detection failed for {filename}: {e}")
         
         # Fallback to filename-based detection
         file_ext = Path(filename).suffix.lower()
         mime_type_map = {
             '.pdf': 'application/pdf',
-            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
             '.doc': 'application/msword',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
             '.txt': 'text/plain',
             '.md': 'text/markdown',
             '.rtf': 'application/rtf',
-            '.odt': 'application/vnd.oasis.opendocument.text'
+            '.odt': 'application/vnd.oasis.opendocument.text',
+            '.html': 'text/html',
+            '.xml': 'application/xml'
         }
         
-        return mime_type_map.get(file_ext, 'application/octet-stream')
+        detected_mime = mime_type_map.get(file_ext, 'application/octet-stream')
+        logger.debug(f"MIME type detected via filename: {detected_mime}")
+        return detected_mime
     
     async def _detect_encoding_and_content(self, content: bytes) -> Tuple[str, bool]:
-        """Detect text encoding and whether file contains readable text"""
+        """Detect text encoding and determine if file contains readable text"""
         
-        # Try to decode as text to determine if it has text content
-        encodings_to_try = ['utf-8', 'utf-16', 'latin-1', 'cp1252']
+        # Try to detect encoding
+        encoding = "unknown"
+        has_text_content = False
         
-        for encoding in encodings_to_try:
+        # Common encodings to try
+        encodings_to_try = ['utf-8', 'utf-16', 'latin1', 'cp1252', 'ascii']
+        
+        for enc in encodings_to_try:
             try:
-                decoded = content.decode(encoding)
-                # Check if decoded content looks like readable text
-                printable_ratio = sum(c.isprintable() or c.isspace() for c in decoded) / len(decoded)
+                # Try to decode first 1KB to test encoding
+                test_content = content[:1024].decode(enc)
+                
+                # Check if it looks like text (printable characters)
+                printable_ratio = sum(1 for c in test_content if c.isprintable() or c.isspace()) / len(test_content)
+                
                 if printable_ratio > 0.7:  # 70% printable characters
-                    return encoding, True
+                    encoding = enc
+                    has_text_content = True
+                    break
+                    
             except (UnicodeDecodeError, UnicodeError):
                 continue
         
-        # If no encoding works, it's likely binary
-        return 'binary', False
+        # If no encoding worked, check if it's binary
+        if not has_text_content:
+            # Binary files often have lots of null bytes
+            null_ratio = content.count(b'\x00') / len(content) if content else 0
+            has_text_content = null_ratio < 0.1  # Less than 10% null bytes might still be text
+        
+        return encoding, has_text_content
     
     async def _calculate_processing_complexity(
         self, 
@@ -352,53 +344,35 @@ class FileProcessingService:
         filename: str, 
         mime_type: str
     ) -> float:
-        """Calculate processing complexity score (0.0 to 3.0)"""
+        """Calculate processing complexity score (0.0 to 1.0)"""
         
         complexity = 0.0
         
-        # Base complexity from file size
+        # Base complexity by file size
         size_mb = len(content) / (1024 * 1024)
-        complexity += min(1.0, size_mb * 0.2)  # Up to 1.0 for size
+        size_complexity = min(size_mb / 10.0, 0.4)  # Max 0.4 for size
+        complexity += size_complexity
         
-        # MIME type complexity
-        if mime_type in ['application/pdf', 'application/msword']:
-            complexity += 0.8  # Complex structured documents
-        elif 'officedocument' in mime_type:
-            complexity += 0.6  # Modern Office documents
-        elif mime_type.startswith('text/'):
-            complexity += 0.2  # Simple text files
-        else:
-            complexity += 0.4  # Unknown/other types
+        # Complexity by file type
+        type_complexity_map = {
+            'application/pdf': 0.3,
+            'application/msword': 0.2,
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 0.2,
+            'text/plain': 0.1,
+            'text/markdown': 0.1,
+            'application/rtf': 0.15,
+            'application/vnd.oasis.opendocument.text': 0.2
+        }
+        complexity += type_complexity_map.get(mime_type, 0.25)
         
-        # Content complexity analysis
-        try:
-            if mime_type.startswith('text/') or 'text' in mime_type:
-                text = content.decode('utf-8', errors='ignore')
-                
-                # Word count complexity
-                word_count = len(text.split())
-                complexity += min(0.5, word_count / 20000)  # Up to 0.5 for word count
-                
-                # Structure complexity (tables, lists, formatting)
-                structure_indicators = (
-                    text.count('\n') + text.count('\t') + 
-                    text.count('|') + text.count('*') + text.count('#')
-                )
-                complexity += min(0.3, structure_indicators / 500)
-                
-                # Legal/technical complexity
-                technical_terms = [
-                    'article', 'artikel', 'section', 'clause', 'gdpr', 'dsgvo',
-                    'compliance', 'audit', 'regulation', 'verordnung'
-                ]
-                technical_count = sum(text.lower().count(term) for term in technical_terms)
-                complexity += min(0.4, technical_count / 50)
-                
-        except Exception:
-            # If content analysis fails, add moderate complexity
-            complexity += 0.3
+        # Additional complexity factors
+        if 'pdf' in mime_type.lower():
+            complexity += 0.1  # PDFs need more processing
         
-        return min(3.0, complexity)  # Cap at maximum complexity
+        if 'xml' in mime_type.lower() or 'docx' in filename.lower():
+            complexity += 0.05  # Structured documents
+        
+        return min(complexity, 1.0)  # Cap at 1.0
     
     async def _estimate_processing_time(
         self, 
@@ -408,29 +382,30 @@ class FileProcessingService:
     ) -> float:
         """Estimate processing time in seconds"""
         
-        # Base time calculation
-        base_time = (file_size / (1024 * 1024)) * 0.5  # 0.5s per MB
+        # Base time: 1 second per MB
+        base_time = file_size / (1024 * 1024)
         
         # Complexity multiplier
-        complexity_multiplier = 1.0 + (complexity / 3.0)  # 1.0 to 2.0x
+        complexity_multiplier = 1.0 + (complexity * 2.0)  # 1x to 3x based on complexity
         
-        # MIME type multiplier
-        if mime_type == 'application/pdf':
-            mime_multiplier = 1.5  # PDFs take longer
-        elif 'officedocument' in mime_type:
-            mime_multiplier = 1.3  # Office docs moderately complex
-        elif mime_type.startswith('text/'):
-            mime_multiplier = 0.8  # Text files are faster
-        else:
-            mime_multiplier = 1.0
+        # Type-specific multipliers
+        type_multipliers = {
+            'application/pdf': 2.0,  # PDFs take longer
+            'application/msword': 1.5,
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 1.5,
+            'text/plain': 0.5,  # Text is fast
+            'text/markdown': 0.5
+        }
         
-        estimated_time = base_time * complexity_multiplier * mime_multiplier
+        type_multiplier = type_multipliers.get(mime_type, 1.0)
         
-        # Minimum and maximum bounds
-        return max(0.5, min(30.0, estimated_time))  # Between 0.5s and 30s
+        estimated_time = base_time * complexity_multiplier * type_multiplier
+        
+        # Minimum 0.5 seconds, maximum 60 seconds
+        return max(0.5, min(estimated_time, 60.0))
     
-    def get_batch_statistics(self, processed_files: List[ProcessedFile]) -> Dict[str, Any]:
-        """Get statistics for the processed file batch"""
+    async def get_batch_processing_summary(self, processed_files: List[ProcessedFile]) -> Dict[str, Any]:
+        """Generate summary statistics for a batch of processed files"""
         
         if not processed_files:
             return {"error": "No files processed"}
@@ -471,6 +446,10 @@ class FileProcessingService:
             "text_content_analysis": {
                 "text_files": sum(1 for f in processed_files if f.metadata.has_text_content),
                 "binary_files": sum(1 for f in processed_files if not f.metadata.has_text_content)
+            },
+            "magic_detection_status": {
+                "libmagic_available": self.magic_available,
+                "detection_method": "libmagic" if self.magic_available else "filename_based"
             }
         }
     
